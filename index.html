@@ -1,0 +1,144 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>n3xn Virtual FileSystem v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Sixtyfour&family=JetBrains+Mono:wght@400;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/theme.css" />
+  <link rel="stylesheet" href="css/app.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
+</head>
+<body>
+  <!-- LOGIN / ACCOUNT SCREEN -->
+  <div id="auth-screen" class="screen">
+    <div class="auth-container glow-box">
+      <h1 class="logo">n3xn <span>VFS</span> v2</h1>
+      <p class="subtitle">Encrypted Virtual Filesystem — Local Only</p>
+
+      <div id="login-view">
+        <div class="form-group">
+          <label>Account</label>
+          <select id="account-select"></select>
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="login-password" placeholder="Enter password" autocomplete="current-password" />
+        </div>
+        <button id="btn-login" class="btn primary">Sign In</button>
+        <button id="btn-show-create" class="btn ghost">Create New Account</button>
+        <button id="btn-import-accounts" class="btn ghost">Import Accounts / Full Export</button>
+      </div>
+
+      <div id="create-view" class="hidden">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="new-username" placeholder="Choose username" />
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="new-password" placeholder="Strong password" />
+        </div>
+        <div class="form-group">
+          <label>Confirm Password</label>
+          <input type="password" id="new-password2" placeholder="Confirm" />
+        </div>
+        <button id="btn-create" class="btn primary">Create Account</button>
+        <button id="btn-show-login" class="btn ghost">Back to Sign In</button>
+      </div>
+
+      <p id="auth-error" class="error"></p>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="app-screen" class="screen hidden">
+    <header class="topbar">
+      <div class="brand">n3xn <span>VFS</span> <small>v2</small></div>
+      <div class="path-bar">
+        <span id="current-path">/</span>
+      </div>
+      <div class="user-area">
+        <span id="current-user"></span>
+        <button id="btn-export-fs" class="btn small" title="Export entire encrypted FS">Export FS</button>
+        <button id="btn-logout" class="btn small ghost">Logout</button>
+      </div>
+    </header>
+
+    <div class="main-layout">
+      <!-- SIDEBAR: FILE TREE -->
+      <aside class="sidebar glow-box">
+        <div class="sidebar-header">
+          <span>File System</span>
+          <div class="sidebar-actions">
+            <button id="btn-new-file" class="icon-btn" title="New File">📄</button>
+            <button id="btn-new-folder" class="icon-btn" title="New Folder">📁</button>
+            <button id="btn-import" class="icon-btn" title="Import Files / Folder / ZIP">📥</button>
+            <button id="btn-import-downloads" class="icon-btn" title="Import Chromebook Downloads">💾</button>
+          </div>
+        </div>
+        <div id="file-tree" class="file-tree"></div>
+      </aside>
+
+      <!-- CENTER: EDITOR + PREVIEW -->
+      <main class="editor-area">
+        <div class="tabs" id="editor-tabs"></div>
+        <div id="monaco-container"></div>
+        <div id="preview-container" class="hidden"></div>
+        <div id="empty-editor" class="empty-state">
+          <p>Select a file or create a new one</p>
+          <p class="hint">Monaco Editor • All languages • Gigantic file support via streaming</p>
+        </div>
+      </main>
+
+      <!-- RIGHT: TERMINAL -->
+      <aside class="terminal-panel glow-box">
+        <div class="terminal-header">
+          <span>Terminal</span>
+          <button id="btn-clear-term" class="icon-btn" title="Clear">🗑</button>
+        </div>
+        <div id="terminal-output" class="terminal-output"></div>
+        <div class="terminal-input-row">
+          <span class="prompt">n3xn@vfs:~$</span>
+          <input type="text" id="terminal-input" autocomplete="off" spellcheck="false" />
+        </div>
+      </aside>
+    </div>
+
+    <!-- STATUS BAR -->
+    <footer class="statusbar">
+      <span id="status-msg">Ready</span>
+      <span id="status-stats"></span>
+    </footer>
+  </div>
+
+  <!-- MODALS -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal glow-box">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn ghost">Cancel</button>
+        <button id="modal-confirm" class="btn primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file inputs -->
+  <input type="file" id="file-input" multiple hidden />
+  <input type="file" id="folder-input" webkitdirectory directory multiple hidden />
+  <input type="file" id="zip-input" accept=".zip" hidden />
+  <input type="file" id="json-import" accept=".json,.n3xn" hidden />
+
+  <script type="module" src="js/crypto.js"></script>
+  <script type="module" src="js/db.js"></script>
+  <script type="module" src="js/fs.js"></script>
+  <script type="module" src="js/terminal.js"></script>
+  <script type="module" src="js/editor.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
