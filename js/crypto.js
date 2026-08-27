@@ -105,26 +105,44 @@ export function fromBase64(b64) {
   return bytes;
 }
 
+/** Derive raw bits for password verification (extractable) */
+async function deriveVerifyBits(password, salt) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"]
+  );
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      salt,
+      iterations: ITERATIONS,
+      hash: "SHA-256",
+    },
+    keyMaterial,
+    256 // 32 bytes
+  );
+  return new Uint8Array(bits);
+}
+
 export async function hashPassword(password) {
   // For account verification only (never store plain password)
-  const enc = new TextEncoder();
   const salt = crypto.getRandomValues(new Uint8Array(16));
-  const key = await deriveKey(password, salt);
-  // Export a verification hash (we store salt + a derived verification value)
-  const verify = await crypto.subtle.exportKey("raw", key);
+  const bits = await deriveVerifyBits(password, salt);
   return {
     salt: toBase64(salt),
-    hash: toBase64(new Uint8Array(verify)),
+    hash: toBase64(bits),
   };
 }
 
 export async function verifyPassword(password, stored) {
   try {
     const salt = fromBase64(stored.salt);
-    const key = await deriveKey(password, salt);
-    const verify = await crypto.subtle.exportKey("raw", key);
-    const hash = toBase64(new Uint8Array(verify));
-    return hash === stored.hash;
+    const bits = await deriveVerifyBits(password, salt);
+    return toBase64(bits) === stored.hash;
   } catch {
     return false;
   }
