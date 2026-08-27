@@ -1,0 +1,164 @@
+/* n3xn VFS v2 — Seraph-inspired dark theme with true white glows */
+
+:root {
+  --bg: #050508;
+  --bg-panel: #0a0a0f;
+  --bg-elevated: #0f0f16;
+  --border: #1a1a28;
+  --border-glow: rgba(255, 255, 255, 0.15);
+  --text: #e8e8f0;
+  --text-dim: #8888a0;
+  --accent: #ffffff;
+  --accent-dim: rgba(255, 255, 255, 0.6);
+  --glow: 0 0 12px rgba(255, 255, 255, 0.25), 0 0 30px rgba(255, 255, 255, 0.08);
+  --glow-strong: 0 0 20px rgba(255, 255, 255, 0.4), 0 0 50px rgba(255, 255, 255, 0.15);
+  --error: #ff4466;
+  --success: #44ff88;
+  --font-ui: "JetBrains Mono", "Share Tech Mono", monospace;
+  --font-pixel: "Sixtyfour", monospace;
+  --radius: 4px;
+  --transition: 0.18s ease;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glow boxes */
+.glow-box {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  box-shadow: var(--glow);
+  border-radius: var(--radius);
+}
+
+.glow-box:hover {
+  border-color: var(--border-glow);
+}
+
+/* Buttons */
+.btn {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text);
+  cursor: pointer;
+  border-radius: var(--radius);
+  transition: all var(--transition);
+  letter-spacing: 0.5px;
+}
+
+.btn:hover {
+  border-color: var(--accent-dim);
+  box-shadow: var(--glow);
+  color: #fff;
+}
+
+.btn.primary {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  box-shadow: var(--glow-strong);
+  background: #f0f0f0;
+}
+
+.btn.ghost {
+  background: transparent;
+}
+
+.btn.small {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  transition: all var(--transition);
+}
+
+.icon-btn:hover {
+  color: #fff;
+  text-shadow: 0 0 8px #fff;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg);
+}
+::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Inputs */
+input, select, textarea {
+  font-family: var(--font-ui);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  width: 100%;
+  outline: none;
+  transition: border-color var(--transition);
+}
+
+input:focus, select:focus, textarea:focus {
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.1);
+}
+
+label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.form-group {
+  margin-bottom: 14px;
+}
+
+.error {
+  color: var(--error);
+  margin-top: 12px;
+  font-size: 12px;
+  text-shadow: 0 0 6px var(--error);
+}
+
+.hidden {
+  display: none !important;
+}
