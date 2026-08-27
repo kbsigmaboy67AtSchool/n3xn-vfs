@@ -1,146 +1,79 @@
 /**
- * n3xn VFS v2 — Multi-mode file runners / previews
+ * n3xn VFS v2 — Runners
  *
- * 1. HTML  → iframe preview or new about:blank window
- * 2. JS    → run in new about:blank (with console capture)
- * 3. Image → in-app preview pane
- * 4. Markdown → rendered HTML preview
- * 5. JSON  → pretty formatted viewer
- * 6. CSS   → live demo page with sample HTML
- * Bonus: raw text, data-URL open, split editor+preview
+ * Every run creates a typed Blob, opens it, and logs the blob: URL in the terminal.
+ * HTML / games use unrestricted iframes (no sandbox) with full allow= + allowfullscreen.
  */
 
 import * as fs from "./fs.js";
 
 let previewVisible = false;
+const blobRegistry = []; // { url, path, mime, created }
 
-export function getActivePath() {
-  // set by editor via window
-  return window.__n3xnActivePath || null;
-}
+const MIME = {
+  html: "text/html",
+  htm: "text/html",
+  js: "text/javascript",
+  mjs: "text/javascript",
+  cjs: "text/javascript",
+  css: "text/css",
+  json: "application/json",
+  md: "text/markdown",
+  markdown: "text/markdown",
+  txt: "text/plain",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  ico: "image/x-icon",
+  pdf: "application/pdf",
+  wasm: "application/wasm",
+  mp3: "audio/mpeg",
+  wav: "audio/wav",
+  ogg: "audio/ogg",
+  mp4: "video/mp4",
+  webm: "video/webm",
+};
+
+// Full permissions for games / rich HTML (no sandbox)
+const IFRAME_ALLOW =
+  "accelerometer; autoplay; bluetooth; camera; display-capture; encrypted-media; " +
+  "fullscreen; gamepad; geolocation; gyroscope; hid; idle-detection; magnetometer; " +
+  "microphone; midi; payment; picture-in-picture; publickey-credentials-get; " +
+  "screen-wake-lock; serial; usb; web-share; xr-spatial-tracking; clipboard-read; clipboard-write";
 
 function extOf(path) {
   return (path || "").split(".").pop()?.toLowerCase() || "";
 }
 
-function isImage(path) {
-  return ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(extOf(path));
+function mimeFor(path, fallback) {
+  return MIME[extOf(path)] || fallback || "application/octet-stream";
 }
 
-function isHtml(path) {
-  return ["html", "htm"].includes(extOf(path));
+function termPrint(msg, cls = "out") {
+  const el = document.getElementById("terminal-output");
+  if (!el) return;
+  const line = document.createElement("div");
+  line.className = cls;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
 }
 
-function isJs(path) {
-  return ["js", "mjs", "cjs"].includes(extOf(path));
-}
-
-function isMd(path) {
-  return ["md", "markdown"].includes(extOf(path));
-}
-
-function isJson(path) {
-  return extOf(path) === "json";
-}
-
-function isCss(path) {
-  return ["css", "scss", "less"].includes(extOf(path));
-}
-
-/** Detect best default runner for a path */
-export function detectRunner(path) {
-  if (isHtml(path)) return "html";
-  if (isJs(path)) return "js";
-  if (isImage(path)) return "image";
-  if (isMd(path)) return "markdown";
-  if (isJson(path)) return "json";
-  if (isCss(path)) return "css";
-  return "text";
-}
-
-export function availableRunners(path) {
-  const all = [
-    { id: "html", label: "HTML Preview", icon: "🌐" },
-    { id: "html-window", label: "HTML → New Window", icon: "🗔" },
-    { id: "js", label: "Run JS (new window)", icon: "⚡" },
-    { id: "image", label: "Image Preview", icon: "🖼" },
-    { id: "markdown", label: "Markdown Render", icon: "📝" },
-    { id: "json", label: "JSON Viewer", icon: "{}" },
-    { id: "css", label: "CSS Live Demo", icon: "🎨" },
-    { id: "text", label: "Raw Text Preview", icon: "📄" },
-    { id: "dataurl", label: "Open as Data URL", icon: "🔗" },
-  ];
-  // Prioritize relevant ones but allow all
-  const best = detectRunner(path);
-  return all.sort((a, b) => (a.id === best || a.id.startsWith(best) ? -1 : 1));
-}
-
-async function readText(path) {
-  const f = await fs.readFile(path);
-  if (!f) throw new Error("File not found: " + path);
-  return f.text();
-}
-
-async function readBytes(path) {
-  const f = await fs.readFile(path);
-  if (!f) throw new Error("File not found: " + path);
-  return { content: f.content, mime: f.mime || "application/octet-stream" };
-}
-
-function showPreview(html, title = "Preview") {
-  const container = document.getElementById("preview-container");
-  const monaco = document.getElementById("monaco-container");
-  if (!container) return;
-
-  container.classList.remove("hidden");
-  monaco.classList.add("preview-split");
-  previewVisible = true;
-
-  container.innerHTML = `
-    <div class="preview-toolbar">
-      <span class="preview-title">${escapeHtml(title)}</span>
-      <div class="preview-actions">
-        <button class="btn small ghost" id="btn-preview-popout" title="Open in new window">Pop out</button>
-        <button class="btn small ghost" id="btn-preview-close" title="Close preview">✕</button>
-      </div>
-    </div>
-    <div class="preview-body">${html}</div>
-  `;
-
-  document.getElementById("btn-preview-close").onclick = hidePreview;
-  document.getElementById("btn-preview-popout").onclick = () => {
-    const body = container.querySelector(".preview-body");
-    const w = window.open("about:blank", "_blank");
-    if (w) {
-      w.document.write(`<!DOCTYPE html><html><head><title>${escapeHtml(title)}</title>
-        <style>body{margin:0;background:#111;color:#eee;font-family:system-ui}</style>
-        </head><body>${body.innerHTML}</body></html>`);
-      w.document.close();
-    }
-  };
-
-  // Resize monaco
-  requestAnimationFrame(() => {
-    if (window.__n3xnEditor) window.__n3xnEditor.layout();
-  });
-}
-
-export function hidePreview() {
-  const container = document.getElementById("preview-container");
-  const monaco = document.getElementById("monaco-container");
-  if (container) {
-    container.classList.add("hidden");
-    container.innerHTML = "";
+function termPrintLink(label, url) {
+  const el = document.getElementById("terminal-output");
+  if (!el) {
+    console.log(label, url);
+    return;
   }
-  if (monaco) monaco.classList.remove("preview-split");
-  previewVisible = false;
-  requestAnimationFrame(() => {
-    if (window.__n3xnEditor) window.__n3xnEditor.layout();
-  });
-}
-
-export function isPreviewVisible() {
-  return previewVisible;
+  const line = document.createElement("div");
+  line.className = "ok";
+  line.innerHTML = `${escapeHtml(label)} <a href="${url}" target="_blank" rel="noopener" style="color:#8cf;word-break:break-all">${escapeHtml(url)}</a>`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
 }
 
 function escapeHtml(s) {
@@ -151,251 +84,324 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
-/* ========== 1. HTML Preview (in-app iframe) ========== */
-export async function runHtml(path) {
-  const text = await readText(path);
-  // Rewrite relative asset refs is hard without full server; inject base note
-  const srcdoc = text;
-  showPreview(
-    `<iframe class="preview-iframe" sandbox="allow-scripts allow-same-origin allow-forms allow-modals" srcdoc="${escapeAttr(srcdoc)}"></iframe>`,
-    `HTML · ${path}`
-  );
+/** Create typed blob, register, log to terminal, return { blob, url, mime } */
+export async function createBlobFromPath(path, overrideMime) {
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("File not found: " + path);
+  const mime = overrideMime || f.mime || mimeFor(path);
+  const blob = new Blob([f.content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  blobRegistry.push({ url, path, mime, created: Date.now(), size: f.content.length });
+  termPrintLink(`[blob] ${path} (${mime}, ${f.content.length}b) →`, url);
+  return { blob, url, mime, size: f.content.length };
 }
 
-function escapeAttr(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
+export function createBlobFromText(text, mime, label = "inline") {
+  const blob = new Blob([text], { type: mime || "text/html" });
+  const url = URL.createObjectURL(blob);
+  blobRegistry.push({ url, path: label, mime: mime || "text/html", created: Date.now(), size: text.length });
+  termPrintLink(`[blob] ${label} (${mime || "text/html"}, ${text.length}b) →`, url);
+  return { blob, url, mime: mime || "text/html" };
 }
 
-/* ========== 2. HTML → New about:blank window ========== */
+export function listBlobs() {
+  return blobRegistry.slice();
+}
+
+export function revokeBlob(url) {
+  const i = blobRegistry.findIndex((b) => b.url === url);
+  if (i >= 0) blobRegistry.splice(i, 1);
+  try { URL.revokeObjectURL(url); } catch {}
+}
+
+export function detectRunner(path) {
+  const e = extOf(path);
+  if (["html", "htm"].includes(e)) return "html-window";
+  if (["js", "mjs", "cjs"].includes(e)) return "js";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
+  if (["md", "markdown"].includes(e)) return "markdown";
+  if (e === "json") return "json";
+  if (["css", "scss", "less"].includes(e)) return "css";
+  if (["mp4", "webm", "mp3", "wav", "ogg", "pdf"].includes(e)) return "blob-open";
+  return "blob-open";
+}
+
+async function readText(path) {
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("File not found: " + path);
+  return f.text();
+}
+
+/* ========== In-app preview panel (side, fixed layout) ========== */
+function showPreview(innerHtml, title, blobUrl) {
+  const container = document.getElementById("preview-container");
+  const monaco = document.getElementById("monaco-container");
+  const split = document.getElementById("editor-split");
+  if (!container || !monaco) return;
+
+  container.classList.remove("hidden");
+  monaco.classList.add("preview-split");
+  if (split) split.classList.add("has-preview");
+  previewVisible = true;
+
+  container.innerHTML = `
+    <div class="preview-toolbar">
+      <span class="preview-title">${escapeHtml(title)}</span>
+      <div class="preview-actions">
+        ${blobUrl ? `<a class="btn small ghost" href="${blobUrl}" target="_blank" rel="noopener">Open blob</a>` : ""}
+        <button class="btn small ghost" id="btn-preview-fullscreen" title="Fullscreen">⛶</button>
+        <button class="btn small ghost" id="btn-preview-close" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="preview-body">${innerHtml}</div>
+  `;
+
+  document.getElementById("btn-preview-close").onclick = hidePreview;
+  document.getElementById("btn-preview-fullscreen").onclick = () => {
+    const body = container.querySelector(".preview-body");
+    const frame = body?.querySelector("iframe, img, video");
+    if (frame?.requestFullscreen) frame.requestFullscreen();
+    else if (body?.requestFullscreen) body.requestFullscreen();
+  };
+
+  requestAnimationFrame(() => {
+    if (window.__n3xnEditor) window.__n3xnEditor.layout();
+    // second pass after flex settles
+    setTimeout(() => {
+      if (window.__n3xnEditor) window.__n3xnEditor.layout();
+    }, 50);
+  });
+}
+
+export function hidePreview() {
+  const container = document.getElementById("preview-container");
+  const monaco = document.getElementById("monaco-container");
+  const split = document.getElementById("editor-split");
+  if (container) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+  }
+  if (monaco) monaco.classList.remove("preview-split");
+  if (split) split.classList.remove("has-preview");
+  previewVisible = false;
+  requestAnimationFrame(() => {
+    if (window.__n3xnEditor) window.__n3xnEditor.layout();
+    setTimeout(() => {
+      if (window.__n3xnEditor) window.__n3xnEditor.layout();
+    }, 50);
+  });
+}
+
+export function isPreviewVisible() {
+  return previewVisible;
+}
+
+function iframeHtml(src) {
+  // NO sandbox — full capabilities for games / Unity / WebGL / etc.
+  return `<iframe class="preview-iframe"
+    src="${src}"
+    allowfullscreen
+    allow="${IFRAME_ALLOW}"
+    referrerpolicy="no-referrer"
+  ></iframe>`;
+}
+
+/* ========== 1. HTML → new window (raw blob, correct type) ========== */
 export async function runHtmlWindow(path) {
-  const text = await readText(path);
-  const w = window.open("about:blank", "_blank");
+  const { url } = await createBlobFromPath(path, "text/html");
+  const w = window.open(url, "_blank");
   if (!w) throw new Error("Popup blocked — allow popups for this site");
-  w.document.open();
-  w.document.write(text);
-  w.document.close();
-  w.document.title = path.split("/").pop() || "n3xn preview";
+  termPrint(`Opened HTML window: ${path}`, "ok");
+  return url;
 }
 
-/* ========== 3. JavaScript → new about:blank with console capture ========== */
+/* ========== 2. HTML → in-app fullscreen-capable iframe ========== */
+export async function runHtml(path) {
+  const { url } = await createBlobFromPath(path, "text/html");
+  showPreview(iframeHtml(url), `HTML · ${path}`, url);
+  termPrint(`HTML preview (in-app): ${path}`, "ok");
+  return url;
+}
+
+/* ========== 3. JS → wrapped runner page as blob ========== */
 export async function runJs(path) {
   const code = await readText(path);
-  const w = window.open("about:blank", "_blank");
-  if (!w) throw new Error("Popup blocked — allow popups for this site");
-
-  const html = `<!DOCTYPE html>
+  const name = path.split("/").pop();
+  const page = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
-  <title>n3xn JS · ${escapeHtml(path.split("/").pop())}</title>
+  <title>n3xn JS · ${escapeHtml(name)}</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: #0a0a0f; color: #e8e8f0; font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; }
-    #bar { padding: 10px 14px; background: #111; border-bottom: 1px solid #222; display: flex; gap: 12px; align-items: center; }
-    #bar strong { color: #fff; text-shadow: 0 0 8px #fff; }
-    #log { padding: 12px 14px; white-space: pre-wrap; word-break: break-all; min-height: 40vh; }
-    .log-log { color: #aaa; }
-    .log-info { color: #8af; }
-    .log-warn { color: #fa0; }
-    .log-error { color: #f66; }
-    .log-result { color: #4f8; margin-top: 8px; border-top: 1px solid #222; padding-top: 8px; }
-    #out { padding: 12px; border-top: 1px solid #222; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#0a0a0f;color:#e8e8f0;font-family:ui-monospace,monospace;font-size:13px}
+    #bar{padding:10px 14px;background:#111;border-bottom:1px solid #222;display:flex;gap:12px;align-items:center}
+    #bar strong{color:#fff;text-shadow:0 0 8px #fff}
+    #log{padding:12px 14px;white-space:pre-wrap;word-break:break-all;min-height:50vh}
+    .log-log{color:#aaa}.log-info{color:#8af}.log-warn{color:#fa0}
+    .log-error{color:#f66}.log-result{color:#4f8;margin-top:8px;border-top:1px solid #222;padding-top:8px}
   </style>
 </head>
 <body>
-  <div id="bar"><strong>n3xn</strong> <span>JS Runner</span> <span style="opacity:.5">${escapeHtml(path)}</span></div>
+  <div id="bar"><strong>n3xn</strong><span>JS Runner</span><span style="opacity:.5">${escapeHtml(path)}</span></div>
   <div id="log"></div>
-  <div id="out"></div>
   <script>
     const logEl = document.getElementById('log');
     function append(cls, args) {
       const line = document.createElement('div');
       line.className = cls;
       line.textContent = args.map(a => {
-        try {
-          if (typeof a === 'object') return JSON.stringify(a, null, 2);
-          return String(a);
-        } catch { return String(a); }
+        try { return typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a); }
+        catch { return String(a); }
       }).join(' ');
       logEl.appendChild(line);
     }
-    const _log = console.log, _warn = console.warn, _err = console.error, _info = console.info;
-    console.log = (...a) => { append('log-log', a); _log.apply(console, a); };
-    console.info = (...a) => { append('log-info', a); _info.apply(console, a); };
-    console.warn = (...a) => { append('log-warn', a); _warn.apply(console, a); };
-    console.error = (...a) => { append('log-error', a); _err.apply(console, a); };
-    window.onerror = (msg, src, line, col, err) => {
-      append('log-error', [msg + (line ? ' @ ' + line + ':' + col : '')]);
-    };
+    const _l = console.log, _w = console.warn, _e = console.error, _i = console.info;
+    console.log = (...a) => { append('log-log', a); _l.apply(console, a); };
+    console.info = (...a) => { append('log-info', a); _i.apply(console, a); };
+    console.warn = (...a) => { append('log-warn', a); _w.apply(console, a); };
+    console.error = (...a) => { append('log-error', a); _e.apply(console, a); };
+    window.onerror = (msg, s, line, col) => append('log-error', [msg + (line ? ' @ ' + line + ':' + col : '')]);
+    window.addEventListener('unhandledrejection', e => append('log-error', ['Unhandled: ' + e.reason]));
     try {
-      const __result = (function() {
+      const __r = (function() {
 ${code}
       })();
-      if (__result !== undefined) {
-        append('log-result', ['→', __result]);
-      }
+      if (__r !== undefined) append('log-result', ['→', __r]);
     } catch (e) {
       append('log-error', [e && e.stack ? e.stack : String(e)]);
     }
   </script>
 </body>
 </html>`;
-
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  const { url } = createBlobFromText(page, "text/html", `js-runner:${path}`);
+  const w = window.open(url, "_blank");
+  if (!w) throw new Error("Popup blocked — allow popups");
+  termPrint(`JS runner opened: ${path}`, "ok");
+  return url;
 }
 
-/* ========== 4. Image Preview ========== */
+/* ========== 4. Image ========== */
 export async function runImage(path) {
-  const { content, mime } = await readBytes(path);
-  const blob = new Blob([content], { type: mime || "image/png" });
-  const url = URL.createObjectURL(blob);
-  const isSvg = extOf(path) === "svg";
+  const { url, mime } = await createBlobFromPath(path);
   showPreview(
     `<div class="preview-image-wrap">
       <img src="${url}" alt="${escapeHtml(path)}" class="preview-image" />
-      <p class="preview-meta">${escapeHtml(path)} · ${mime || "image"} · ${content.length} bytes</p>
+      <p class="preview-meta">${escapeHtml(path)} · ${mime}</p>
     </div>`,
-    `Image · ${path}`
+    `Image · ${path}`,
+    url
   );
-  // Revoke later — keep for session
-  setTimeout(() => URL.revokeObjectURL(url), 120000);
+  // also open in new tab option via toolbar link
+  return url;
 }
 
-/* ========== 5. Markdown Render ========== */
+/* ========== 5. Markdown → HTML blob ========== */
 export async function runMarkdown(path) {
   const text = await readText(path);
-  const html = simpleMarkdown(text);
-  showPreview(
-    `<article class="md-preview">${html}</article>`,
-    `Markdown · ${path}`
-  );
+  const body = simpleMarkdown(text);
+  const page = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${escapeHtml(path)}</title>
+<style>
+body{margin:0;background:#0a0a0f;color:#e8e8f0;font-family:system-ui,sans-serif;line-height:1.6}
+article{max-width:720px;margin:0 auto;padding:24px}
+h1,h2,h3{color:#fff;text-shadow:0 0 8px rgba(255,255,255,.2)}
+code{background:#1a1a28;padding:1px 5px;border-radius:3px}
+pre{background:#050508;border:1px solid #222;padding:12px;overflow:auto;border-radius:4px}
+a{color:#8cf}
+</style></head><body><article>${body}</article></body></html>`;
+  const { url } = createBlobFromText(page, "text/html", `md:${path}`);
+  const w = window.open(url, "_blank");
+  if (!w) showPreview(iframeHtml(url), `Markdown · ${path}`, url);
+  else termPrint(`Markdown opened: ${path}`, "ok");
+  return url;
 }
 
-/** Lightweight markdown → HTML (no external dep) */
 function simpleMarkdown(src) {
   let s = escapeHtml(src);
-  // code blocks
   s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre class="md-code"><code class="lang-${lang}">${code.trim()}</code></pre>`
+    `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`
   );
-  // inline code
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-  // headers
   s = s.replace(/^###### (.+)$/gm, "<h6>$1</h6>");
   s = s.replace(/^##### (.+)$/gm, "<h5>$1</h5>");
   s = s.replace(/^#### (.+)$/gm, "<h4>$1</h4>");
   s = s.replace(/^### (.+)$/gm, "<h3>$1</h3>");
   s = s.replace(/^## (.+)$/gm, "<h2>$1</h2>");
   s = s.replace(/^# (.+)$/gm, "<h1>$1</h1>");
-  // bold / italic
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/\*(.+?)\*/g, "<em>$1</em>");
-  // links
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // hr
   s = s.replace(/^---$/gm, "<hr/>");
-  // lists
   s = s.replace(/^\* (.+)$/gm, "<li>$1</li>");
   s = s.replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`);
-  // paragraphs
   s = s.replace(/\n\n+/g, "</p><p>");
   s = `<p>${s}</p>`;
   s = s.replace(/<p><\/p>/g, "");
-  s = s.replace(/<p>(<h[1-6]>)/g, "$1");
-  s = s.replace(/(<\/h[1-6]>)<\/p>/g, "$1");
-  s = s.replace(/<p>(<pre)/g, "$1");
-  s = s.replace(/(<\/pre>)<\/p>/g, "$1");
-  s = s.replace(/<p>(<ul>)/g, "$1");
-  s = s.replace(/(<\/ul>)<\/p>/g, "$1");
+  s = s.replace(/<p>(<h[1-6]>)/g, "$1").replace(/(<\/h[1-6]>)<\/p>/g, "$1");
+  s = s.replace(/<p>(<pre)/g, "$1").replace(/(<\/pre>)<\/p>/g, "$1");
+  s = s.replace(/<p>(<ul>)/g, "$1").replace(/(<\/ul>)<\/p>/g, "$1");
   s = s.replace(/<p>(<hr\/>)<\/p>/g, "$1");
   return s;
 }
 
-/* ========== 6. JSON Viewer ========== */
+/* ========== 6. JSON ========== */
 export async function runJson(path) {
   const text = await readText(path);
-  let pretty;
+  let pretty = text;
   try {
     pretty = JSON.stringify(JSON.parse(text), null, 2);
-  } catch (e) {
-    pretty = text;
-    showPreview(
-      `<pre class="json-preview error">Invalid JSON:\n${escapeHtml(e.message)}\n\n${escapeHtml(text)}</pre>`,
-      `JSON · ${path}`
-    );
-    return;
-  }
-  showPreview(
-    `<pre class="json-preview">${syntaxHighlightJson(pretty)}</pre>`,
-    `JSON · ${path}`
-  );
+  } catch {}
+  const page = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${escapeHtml(path)}</title>
+<style>body{margin:0;background:#0a0a0f;color:#cde;font-family:ui-monospace,monospace;font-size:13px;padding:16px;white-space:pre-wrap}</style>
+</head><body>${escapeHtml(pretty)}</body></html>`;
+  const { url } = createBlobFromText(page, "text/html", `json:${path}`);
+  window.open(url, "_blank");
+  termPrint(`JSON opened: ${path}`, "ok");
+  return url;
 }
 
-function syntaxHighlightJson(json) {
-  return escapeHtml(json).replace(
-    /("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
-    (match) => {
-      let cls = "json-number";
-      if (/^"/.test(match)) {
-        cls = /:$/.test(match) ? "json-key" : "json-string";
-      } else if (/true|false/.test(match)) cls = "json-bool";
-      else if (/null/.test(match)) cls = "json-null";
-      return `<span class="${cls}">${match}</span>`;
-    }
-  );
-}
-
-/* ========== 7. CSS Live Demo ========== */
+/* ========== 7. CSS live demo ========== */
 export async function runCss(path) {
   const css = await readText(path);
-  const demo = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><style>
-${css}
-</style></head>
+  const demo = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>CSS · ${escapeHtml(path)}</title>
+<style>${css}</style></head>
 <body>
   <div class="demo">
     <h1>CSS Live Preview</h1>
-    <p>This page loads your stylesheet. Edit classes below or in the source file.</p>
+    <p>Your stylesheet is applied to this page.</p>
     <button>Button</button>
-    <input type="text" placeholder="Input" />
-    <div class="card">Card / box</div>
-    <ul><li>List item 1</li><li>List item 2</li></ul>
+    <input type="text" placeholder="Input"/>
+    <div class="card">Card</div>
+    <ul><li>Item 1</li><li>Item 2</li></ul>
     <a href="#">Link</a>
   </div>
 </body></html>`;
-
-  showPreview(
-    `<iframe class="preview-iframe" sandbox="allow-same-origin" srcdoc="${escapeAttr(demo)}"></iframe>`,
-    `CSS · ${path}`
-  );
+  const { url } = createBlobFromText(demo, "text/html", `css:${path}`);
+  const w = window.open(url, "_blank");
+  if (!w) showPreview(iframeHtml(url), `CSS · ${path}`, url);
+  else termPrint(`CSS demo opened: ${path}`, "ok");
+  return url;
 }
 
-/* ========== 8. Raw text / fallback ========== */
+/* ========== 8. Raw blob open (any type) ========== */
+export async function runBlobOpen(path) {
+  const { url, mime } = await createBlobFromPath(path);
+  const w = window.open(url, "_blank");
+  if (!w) throw new Error("Popup blocked");
+  termPrint(`Opened blob (${mime}): ${path}`, "ok");
+  return url;
+}
+
+/* ========== 9. Text preview page ========== */
 export async function runText(path) {
   const text = await readText(path);
-  const truncated = text.length > 200000 ? text.slice(0, 200000) + "\n\n… [truncated]" : text;
-  showPreview(
-    `<pre class="text-preview">${escapeHtml(truncated)}</pre>`,
-    `Text · ${path}`
-  );
-}
-
-/* ========== 9. Open as data URL in new tab ========== */
-export async function runDataUrl(path) {
-  const { content, mime } = await readBytes(path);
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const w = window.open(url, "_blank");
-  if (!w) {
-    URL.revokeObjectURL(url);
-    throw new Error("Popup blocked");
-  }
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  const truncated = text.length > 500000 ? text.slice(0, 500000) + "\n\n… [truncated]" : text;
+  const page = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${escapeHtml(path)}</title>
+<style>body{margin:0;background:#0a0a0f;color:#ccc;font-family:ui-monospace,monospace;font-size:12px;padding:16px;white-space:pre-wrap;word-break:break-word}</style>
+</head><body>${escapeHtml(truncated)}</body></html>`;
+  const { url } = createBlobFromText(page, "text/html", `text:${path}`);
+  window.open(url, "_blank");
+  return url;
 }
 
 /* ========== Dispatcher ========== */
@@ -422,21 +428,15 @@ export async function run(path, mode) {
     case "text":
       return runText(path);
     case "dataurl":
-      return runDataUrl(path);
+    case "blob-open":
+      return runBlobOpen(path);
     default:
-      // smart fallback
-      if (isHtml(path)) return runHtml(path);
-      if (isJs(path)) return runJs(path);
-      if (isImage(path)) return runImage(path);
-      if (isMd(path)) return runMarkdown(path);
-      if (isJson(path)) return runJson(path);
-      if (isCss(path)) return runCss(path);
-      return runText(path);
+      return runBlobOpen(path);
   }
 }
 
 export async function runActive(mode) {
-  const path = getActivePath();
+  const path = window.__n3xnActivePath;
   if (!path) throw new Error("No file open");
   return run(path, mode);
 }
