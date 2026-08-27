@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -69,37 +68,42 @@
       </div>
     </header>
 
-    <div class="main-layout">
-      <!-- SIDEBAR: FILE TREE -->
-      <aside class="sidebar glow-box">
-        <div class="sidebar-header">
-          <span>File System</span>
-          <div class="sidebar-actions">
-            <button id="btn-new-file" class="icon-btn" title="New File">📄</button>
-            <button id="btn-new-folder" class="icon-btn" title="New Folder">📁</button>
-            <button id="btn-import" class="icon-btn" title="Import Files / Folder / ZIP">📥</button>
-            <button id="btn-import-downloads" class="icon-btn" title="Import Chromebook Downloads">💾</button>
+    <div class="main-layout explorer-mode" id="main-layout">
+      <div class="workspace">
+        <!-- FILE EXPLORER — full screen until a file is opened -->
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <span>File Explorer</span>
+            <div class="sidebar-actions">
+              <button id="btn-new-file" class="icon-btn" title="New File">📄</button>
+              <button id="btn-new-folder" class="icon-btn" title="New Folder">📁</button>
+              <button id="btn-import" class="icon-btn" title="Import Files / Folder / ZIP">📥</button>
+              <button id="btn-import-downloads" class="icon-btn" title="Import Chromebook Downloads">💾</button>
+            </div>
           </div>
-        </div>
-        <div id="file-tree" class="file-tree"></div>
-      </aside>
+          <div id="file-tree" class="file-tree"></div>
+        </aside>
 
-      <!-- CENTER: EDITOR + PREVIEW -->
-      <main class="editor-area">
-        <div class="tabs" id="editor-tabs"></div>
-        <div id="monaco-container"></div>
-        <div id="preview-container" class="hidden"></div>
-        <div id="empty-editor" class="empty-state">
-          <p>Select a file or create a new one</p>
-          <p class="hint">Monaco Editor • All languages • Gigantic file support via streaming</p>
-        </div>
-      </main>
+        <!-- EDITOR — only visible when a file is open -->
+        <main class="editor-area" id="editor-area">
+          <div class="tabs" id="editor-tabs"></div>
+          <div id="monaco-container"></div>
+          <div id="preview-container" class="hidden"></div>
+          <div id="empty-editor" class="empty-state">
+            <p>Select a file or create a new one</p>
+            <p class="hint">Monaco Editor • Scroll freely • Ctrl+S to save</p>
+          </div>
+        </main>
+      </div>
 
-      <!-- RIGHT: TERMINAL -->
-      <aside class="terminal-panel glow-box">
-        <div class="terminal-header">
+      <!-- TERMINAL — collapsible bottom panel -->
+      <aside class="terminal-panel" id="terminal-panel">
+        <div class="terminal-header" id="terminal-toggle">
           <span>Terminal</span>
-          <button id="btn-clear-term" class="icon-btn" title="Clear">🗑</button>
+          <div class="terminal-header-actions">
+            <button id="btn-clear-term" class="icon-btn" title="Clear">🗑</button>
+            <button id="btn-toggle-term" class="icon-btn" title="Collapse / Expand">▼</button>
+          </div>
         </div>
         <div id="terminal-output" class="terminal-output"></div>
         <div class="terminal-input-row">
