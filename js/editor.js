@@ -93,6 +93,7 @@ export async function openFile(path) {
   let tab = openTabs.find((t) => t.path === path);
   if (tab) {
     switchTo(path);
+    setEditingMode(true);
     return;
   }
 
@@ -110,6 +111,28 @@ export async function openFile(path) {
   updateTabUI();
   document.getElementById("empty-editor").classList.add("hidden");
   document.getElementById("monaco-container").classList.remove("hidden");
+  setEditingMode(true);
+
+  // Force Monaco to recalculate layout after becoming visible
+  requestAnimationFrame(() => {
+    if (editor) editor.layout();
+  });
+}
+
+function setEditingMode(on) {
+  const layout = document.getElementById("main-layout");
+  if (!layout) return;
+  if (on) {
+    layout.classList.remove("explorer-mode");
+    layout.classList.add("editing-mode");
+  } else {
+    layout.classList.remove("editing-mode");
+    layout.classList.add("explorer-mode");
+  }
+  // Let Monaco resize after layout change
+  requestAnimationFrame(() => {
+    if (editor) editor.layout();
+  });
 }
 
 function switchTo(path) {
@@ -147,13 +170,19 @@ export function closeTab(path) {
   openTabs.splice(idx, 1);
   if (activePath === path) {
     activePath = openTabs.length ? openTabs[Math.max(0, idx - 1)].path : null;
-    if (activePath) switchTo(activePath);
-    else {
+    if (activePath) {
+      switchTo(activePath);
+    } else {
       editor.setModel(null);
       document.getElementById("empty-editor").classList.remove("hidden");
+      setEditingMode(false);
     }
   }
   updateTabUI();
+}
+
+export function hasOpenTabs() {
+  return openTabs.length > 0;
 }
 
 function updateTabUI() {
