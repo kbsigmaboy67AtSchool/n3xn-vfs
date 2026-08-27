@@ -145,6 +145,9 @@ async function run(line) {
       case "open":
         await cmdRun(args);
         break;
+      case "blobs":
+        await cmdBlobs(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -421,9 +424,9 @@ async function cmdPatch(args) {
 
 async function cmdRun(args) {
   // run [mode] <file>
-  // modes: html, html-window, js, image, markdown, json, css, text, dataurl
+  // modes: html, html-window, js, image, markdown, json, css, text, dataurl, blob-open
   let mode, path;
-  const modes = ["html", "html-window", "js", "image", "markdown", "md", "json", "css", "text", "dataurl", "auto"];
+  const modes = ["html", "html-window", "js", "image", "markdown", "md", "json", "css", "text", "dataurl", "blob-open", "auto"];
   if (args.length === 0) {
     path = window.__n3xnActivePath;
     if (!path) throw new Error("Usage: run [mode] <file>  (or open a file first)");
@@ -440,7 +443,24 @@ async function cmdRun(args) {
   }
   print(`Running ${path}${mode ? " as " + mode : ""}…`);
   await runner.run(path, mode);
-  print("Done", "ok");
+  print("Done — blob URL logged above", "ok");
+}
+
+async function cmdBlobs(args) {
+  const list = runner.listBlobs();
+  if (list.length === 0) {
+    print("No active blob URLs");
+    return;
+  }
+  if (args[0] === "clear" || args[0] === "revoke") {
+    list.forEach((b) => runner.revokeBlob(b.url));
+    print(`Revoked ${list.length} blob(s)`, "ok");
+    return;
+  }
+  list.forEach((b, i) => {
+    print(`[${i}] ${b.path} · ${b.mime} · ${b.size}b`);
+    print(`    ${b.url}`, "ok");
+  });
 }
 
 function showHelp() {
@@ -449,7 +469,8 @@ function showHelp() {
     "  help, clear, pwd, cd, ls [-l], cat, mkdir, touch, rm [-r],",
     "  mv, cp, find <pattern>, echo, whoami, stat, tree,",
     "  export [fs|path], patch <pat> <search> <replace> [--dry],",
-    "  run [mode] <file>  — html|js|image|markdown|json|css|text|dataurl",
+    "  run [mode] <file>  — html|html-window|js|image|markdown|json|css|text|blob-open",
+    "  blobs [clear]      — list / revoke blob URLs from runs",
     "  cmd list|add|rm   — manage custom commands",
     "",
     "Custom commands can use: fs, db, print, args, cwd, resolve",
