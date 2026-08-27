@@ -80,6 +80,12 @@ export function initEditor() {
         saveActive();
       });
 
+      // Ctrl+Enter run
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
+        if (window.__n3xnRunActive) window.__n3xnRunActive();
+      });
+
+      window.__n3xnEditor = editor;
       monacoReady = true;
       resolve(editor);
     });
@@ -141,6 +147,7 @@ function switchTo(path) {
     if (prev) prev.viewState = editor.saveViewState();
   }
   activePath = path;
+  window.__n3xnActivePath = path;
   const tab = openTabs.find((t) => t.path === path);
   if (tab) {
     editor.setModel(tab.model);
@@ -148,6 +155,21 @@ function switchTo(path) {
     editor.focus();
   }
   updateTabUI();
+  // Suggest run mode based on extension
+  const sel = document.getElementById("run-mode");
+  if (sel && path) {
+    const ext = path.split(".").pop()?.toLowerCase();
+    const map = {
+      html: "html-window", htm: "html-window",
+      js: "js", mjs: "js", cjs: "js",
+      png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
+      md: "markdown", markdown: "markdown",
+      json: "json",
+      css: "css", scss: "css", less: "css",
+    };
+    if (map[ext]) sel.value = map[ext];
+    else sel.value = "auto";
+  }
 }
 
 export async function saveActive() {
@@ -174,8 +196,10 @@ export function closeTab(path) {
       switchTo(activePath);
     } else {
       editor.setModel(null);
+      window.__n3xnActivePath = null;
       document.getElementById("empty-editor").classList.remove("hidden");
       setEditingMode(false);
+      if (window.__n3xnHidePreview) window.__n3xnHidePreview();
     }
   }
   updateTabUI();
