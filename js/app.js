@@ -372,7 +372,36 @@ async function downloadPath(path) {
   }
 }
 
-document.getElementById("btn-clear-term").onclick = () => term.clearTerminal();
+document.getElementById("btn-clear-term").onclick = (e) => {
+  e.stopPropagation();
+  term.clearTerminal();
+};
+
+// Collapsible terminal
+const termPanel = document.getElementById("terminal-panel");
+const termToggleBtn = document.getElementById("btn-toggle-term");
+
+function toggleTerminal() {
+  termPanel.classList.toggle("collapsed");
+  const collapsed = termPanel.classList.contains("collapsed");
+  termToggleBtn.textContent = collapsed ? "▲" : "▼";
+  // Resize Monaco after terminal height change
+  requestAnimationFrame(() => {
+    const edInstance = ed.getEditor && ed.getEditor();
+    if (edInstance) edInstance.layout();
+  });
+}
+
+document.getElementById("terminal-toggle").onclick = (e) => {
+  // Don't toggle when clicking clear button
+  if (e.target.closest("#btn-clear-term")) return;
+  toggleTerminal();
+};
+
+document.getElementById("btn-toggle-term").onclick = (e) => {
+  e.stopPropagation();
+  toggleTerminal();
+};
 
 function setStatus(msg) {
   document.getElementById("status-msg").textContent = msg;
