@@ -4,6 +4,7 @@
 
 import * as fs from "./fs.js";
 import * as db from "./db.js";
+import * as runner from "./runner.js";
 
 const outputEl = () => document.getElementById("terminal-output");
 const inputEl = () => document.getElementById("terminal-input");
@@ -138,6 +139,11 @@ async function run(line) {
         break;
       case "patch":
         await cmdPatch(args);
+        break;
+      case "run":
+      case "preview":
+      case "open":
+        await cmdRun(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -413,12 +419,37 @@ async function cmdPatch(args) {
   print(`Done. ${count} file(s) ${dry ? "would be " : ""}affected.`);
 }
 
+async function cmdRun(args) {
+  // run [mode] <file>
+  // modes: html, html-window, js, image, markdown, json, css, text, dataurl
+  let mode, path;
+  const modes = ["html", "html-window", "js", "image", "markdown", "md", "json", "css", "text", "dataurl", "auto"];
+  if (args.length === 0) {
+    path = window.__n3xnActivePath;
+    if (!path) throw new Error("Usage: run [mode] <file>  (or open a file first)");
+  } else if (modes.includes(args[0]) && args[1]) {
+    mode = args[0] === "auto" ? undefined : args[0];
+    path = resolve(args[1]);
+  } else if (modes.includes(args[0]) && !args[1]) {
+    mode = args[0] === "auto" ? undefined : args[0];
+    path = window.__n3xnActivePath;
+    if (!path) throw new Error("No file open");
+  } else {
+    path = resolve(args[0]);
+    mode = args[1] && modes.includes(args[1]) ? args[1] : undefined;
+  }
+  print(`Running ${path}${mode ? " as " + mode : ""}…`);
+  await runner.run(path, mode);
+  print("Done", "ok");
+}
+
 function showHelp() {
   const lines = [
     "Built-in commands:",
     "  help, clear, pwd, cd, ls [-l], cat, mkdir, touch, rm [-r],",
     "  mv, cp, find <pattern>, echo, whoami, stat, tree,",
     "  export [fs|path], patch <pat> <search> <replace> [--dry],",
+    "  run [mode] <file>  — html|js|image|markdown|json|css|text|dataurl",
     "  cmd list|add|rm   — manage custom commands",
     "",
     "Custom commands can use: fs, db, print, args, cwd, resolve",
