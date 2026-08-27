@@ -6,6 +6,7 @@ import * as db from "./db.js";
 import * as fs from "./fs.js";
 import * as term from "./terminal.js";
 import * as ed from "./editor.js";
+import * as runner from "./runner.js";
 
 // ========== AUTH ==========
 
@@ -375,6 +376,41 @@ async function downloadPath(path) {
 document.getElementById("btn-clear-term").onclick = (e) => {
   e.stopPropagation();
   term.clearTerminal();
+};
+
+// ========== RUN / PREVIEW ==========
+async function runActiveFile() {
+  const path = window.__n3xnActivePath;
+  if (!path) {
+    setStatus("No file open");
+    return;
+  }
+  const modeSel = document.getElementById("run-mode");
+  const mode = modeSel && modeSel.value !== "auto" ? modeSel.value : undefined;
+  setStatus(`Running ${path}…`);
+  try {
+    // Save first so preview uses latest content
+    await ed.saveActive();
+    await runner.run(path, mode);
+    const closeBtn = document.getElementById("btn-preview-close-bar");
+    if (closeBtn && runner.isPreviewVisible()) closeBtn.classList.remove("hidden");
+    setStatus(`Ran ${path}`);
+  } catch (err) {
+    setStatus("Run error: " + err.message);
+    console.error(err);
+  }
+}
+
+window.__n3xnRunActive = runActiveFile;
+window.__n3xnHidePreview = () => {
+  runner.hidePreview();
+  const closeBtn = document.getElementById("btn-preview-close-bar");
+  if (closeBtn) closeBtn.classList.add("hidden");
+};
+
+document.getElementById("btn-run").onclick = () => runActiveFile();
+document.getElementById("btn-preview-close-bar").onclick = () => {
+  window.__n3xnHidePreview();
 };
 
 // Collapsible terminal
