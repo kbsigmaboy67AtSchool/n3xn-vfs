@@ -9,12 +9,41 @@ let panel = null;
 let path = null;
 let docRoot = null;
 
+function showPanelEl(el) {
+  if (!el) return;
+  el.classList.remove("hidden");
+  el.style.cssText = [
+    "position:fixed",
+    "left:24px",
+    "right:24px",
+    "top:24px",
+    "bottom:24px",
+    "z-index:99999",
+    "display:flex",
+    "flex-direction:column",
+    "background:#0a0a0f",
+    "border:1px solid #333",
+    "box-shadow:0 0 40px rgba(255,255,255,0.15)",
+    "border-radius:6px",
+    "overflow:hidden",
+    "visibility:visible",
+    "opacity:1",
+    "pointer-events:auto",
+  ].join(";");
+}
+
+function hidePanelEl(el) {
+  if (!el) return;
+  el.classList.add("hidden");
+  el.style.display = "none";
+  el.style.visibility = "hidden";
+}
+
 export function openHtmlVisual(filePath) {
   try {
     path = filePath || "/index.html";
     ensurePanel();
-    panel.classList.remove("hidden");
-    panel.style.display = "flex";
+    showPanelEl(panel);
     load(path).catch((e) => {
       console.error(e);
       alert("HTML visual load error: " + e.message);
@@ -26,41 +55,36 @@ export function openHtmlVisual(filePath) {
 }
 
 export function closeHtmlVisual() {
-  if (panel) {
-    panel.classList.add("hidden");
-    panel.style.display = "none";
-  }
+  hidePanelEl(panel);
 }
 
 function ensurePanel() {
   if (panel && document.body.contains(panel)) return;
-  if (panel && !document.body.contains(panel)) panel = null;
   panel = document.createElement("div");
   panel.id = "html-visual";
   panel.className = "html-visual";
-  panel.style.display = "none";
   panel.innerHTML = `
     <div class="hv-header">
       <span>Visual HTML Editor</span>
       <div>
-        <button class="btn small" id="hv-fs">⛶</button>
-        <button class="btn small primary" id="hv-apply">Apply → file</button>
-        <button class="btn small ghost" id="hv-close">✕</button>
+        <button type="button" class="btn small" id="hv-fs">⛶</button>
+        <button type="button" class="btn small primary" id="hv-apply">Apply → file</button>
+        <button type="button" class="btn small ghost" id="hv-close">✕</button>
       </div>
     </div>
     <div class="hv-toolbar">
-      <button class="btn small" data-tag="h1">H1</button>
-      <button class="btn small" data-tag="h2">H2</button>
-      <button class="btn small" data-tag="p">P</button>
-      <button class="btn small" data-tag="div">Div</button>
-      <button class="btn small" data-tag="button">Button</button>
-      <button class="btn small" data-tag="a">Link</button>
-      <button class="btn small" data-tag="img">Img</button>
-      <button class="btn small" data-tag="ul">List</button>
-      <button class="btn small" data-tag="section">Section</button>
-      <button class="btn small" id="hv-text">Edit text</button>
-      <button class="btn small" id="hv-style">Style…</button>
-      <button class="btn small" id="hv-delete">Delete</button>
+      <button type="button" class="btn small" data-tag="h1">H1</button>
+      <button type="button" class="btn small" data-tag="h2">H2</button>
+      <button type="button" class="btn small" data-tag="p">P</button>
+      <button type="button" class="btn small" data-tag="div">Div</button>
+      <button type="button" class="btn small" data-tag="button">Button</button>
+      <button type="button" class="btn small" data-tag="a">Link</button>
+      <button type="button" class="btn small" data-tag="img">Img</button>
+      <button type="button" class="btn small" data-tag="ul">List</button>
+      <button type="button" class="btn small" data-tag="section">Section</button>
+      <button type="button" class="btn small" id="hv-text">Edit text</button>
+      <button type="button" class="btn small" id="hv-style">Style…</button>
+      <button type="button" class="btn small" id="hv-delete">Delete</button>
     </div>
     <div class="hv-body">
       <div class="hv-tree" id="hv-tree"></div>
@@ -69,15 +93,15 @@ function ensurePanel() {
   `;
   document.body.appendChild(panel);
 
-  document.getElementById("hv-close").onclick = closeHtmlVisual;
-  document.getElementById("hv-fs").onclick = () => {
+  panel.querySelector("#hv-close").onclick = () => closeHtmlVisual();
+  panel.querySelector("#hv-fs").onclick = () => {
     if (!document.fullscreenElement) panel.requestFullscreen?.();
     else document.exitFullscreen?.();
   };
-  document.getElementById("hv-apply").onclick = applyToFile;
-  document.getElementById("hv-text").onclick = editSelectedText;
-  document.getElementById("hv-style").onclick = editSelectedStyle;
-  document.getElementById("hv-delete").onclick = deleteSelected;
+  panel.querySelector("#hv-apply").onclick = applyToFile;
+  panel.querySelector("#hv-text").onclick = editSelectedText;
+  panel.querySelector("#hv-style").onclick = editSelectedStyle;
+  panel.querySelector("#hv-delete").onclick = deleteSelected;
 
   panel.querySelectorAll("[data-tag]").forEach((btn) => {
     btn.onclick = () => insertTag(btn.dataset.tag);
@@ -97,7 +121,8 @@ async function load(filePath) {
     html = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>New</title></head><body><h1>Hello</h1></body></html>";
   }
 
-  const iframe = document.getElementById("hv-preview");
+  const iframe = panel.querySelector("#hv-preview");
+  if (!iframe) throw new Error("Preview iframe missing");
   const blob = new Blob([html], { type: "text/html" });
   const url = URL.createObjectURL(blob);
   iframe.onload = () => {
