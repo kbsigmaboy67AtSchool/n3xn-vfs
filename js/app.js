@@ -116,14 +116,25 @@ document.getElementById("json-import").onchange = async (e) => {
   try {
     const text = await file.text();
     const json = JSON.parse(text);
-    const pass = prompt("Password for this export:");
+    const pass = prompt("Password for this encrypted FS export:");
     if (!pass) return;
+    setStatus("Importing filesystem…");
     const user = await db.importEverything(json, pass);
-    alert(`Imported as ${user}. You can now sign in.`);
-    refreshAccountList();
-    document.getElementById("account-select").value = user;
+    // If already in app, reload tree for current session
+    if (db.getCurrentUser()) {
+      await fs.loadTree();
+      await fs.rebuildTreeFromFiles();
+      await refreshTree();
+      setStatus(`FS imported for ${user}`);
+      alert(`Filesystem imported for ${user}. Tree refreshed.`);
+    } else {
+      alert(`Imported as ${user}. Sign in with that account.`);
+      refreshAccountList();
+      document.getElementById("account-select").value = user;
+    }
   } catch (err) {
     alert("Import failed: " + err.message);
+    setStatus("Import failed");
   }
   e.target.value = "";
 };
@@ -133,9 +144,18 @@ document.getElementById("json-import").onchange = async (e) => {
 async function bootApp() {
   showApp();
   await fs.loadTree();
+  // Ensure tree matches stored files
+  try {
+    const t = fs.getTree();
+    if (!t?.children || Object.keys(t.children).length === 0) {
+      await fs.rebuildTreeFromFiles();
+    }
+  } catch (e) {
+    console.warn(e);
+  }
   term.initTerminal();
   await ed.initEditor();
-  refreshTree();
+  await refreshTree();
   window.refreshTree = refreshTree;
   setStatus("Ready — encrypted & local");
 }
