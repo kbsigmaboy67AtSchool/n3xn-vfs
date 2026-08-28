@@ -9,11 +9,63 @@ let tree = { type: "dir", children: {} }; // in-memory root
 
 export async function loadTree() {
   const root = await db.getMeta("root");
-  tree = root || { type: "dir", children: {} };
+  if (root && root.type === "dir" && root.children && Object.keys(root.children).length > 0) {
+    tree = root;
+  } else {
+    // Meta missing/empty — rebuild from actual IndexedDB file records
+    tree = { type: "dir", children: {} };
+    try {
+      await rebuildTreeFromFiles();
+    } catch (e) {
+      console.warn("rebuildTreeFromFiles failed", e);
+    }
+  }
+  // Always ensure children object exists
+  if (!tree.children) tree.children = {};
+  return tree;
+}
+
+/** Rebuild directory tree from every file stored in IndexedDB */
+export async function rebuildTreeFromFiles() {
+  const files = await db.listAllFiles();
+  const newTree = { type: "dir", children: {} };
+
+  function ensureDir(parts) {
+    let node = newTree;
+    for (const p of parts) {
+      if (!node.children[p]) {
+        node.children[p] = { type: "dir", children: {}, created: Date.now() };
+      } else if (node.children[p].type !== "dir") {
+        // name collision file vs dir — keep as dir wrapper isn't ideal; skip
+        return null;
+      }
+      node = node.children[p];
+    }
+    return node;
+  }
+
+  for (const f of files) {
+    const path = f.path.startsWith("/") ? f.path : "/" + f.path;
+    const parts = path.split("/").filter(Boolean);
+    if (parts.length === 0) continue;
+    const name = parts.pop();
+    const parent = ensureDir(parts);
+    if (!parent) continue;
+    parent.children[name] = {
+      type: "file",
+      size: f.size || 0,
+      mime: f.mime || "application/octet-stream",
+      modified: f.modified || Date.now(),
+    };
+  }
+
+  tree = newTree;
+  await saveTree();
   return tree;
 }
 
 export async function saveTree() {
+  if (!tree.children) tree.children = {};
   await db.setMeta("root", tree);
 }
 
