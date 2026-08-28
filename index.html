@@ -63,6 +63,9 @@
       </div>
       <div class="user-area">
         <span id="current-user"></span>
+        <button id="btn-media" class="btn small ghost" title="Media / Meme editor">Media</button>
+        <button id="btn-html-visual" class="btn small ghost" title="Visual HTML editor">HTML+</button>
+        <button id="btn-fs-app" class="btn small ghost" title="Fullscreen app">⛶</button>
         <button id="btn-export-fs" class="btn small" title="Export entire encrypted FS">Export FS</button>
         <button id="btn-logout" class="btn small ghost">Logout</button>
       </div>
@@ -102,6 +105,7 @@
                 <option value="text">Text</option>
                 <option value="blob-open">Raw blob open</option>
               </select>
+              <button id="btn-fs-editor" class="btn small ghost" title="Fullscreen editor">⛶</button>
               <button id="btn-preview-close-bar" class="btn small ghost hidden" title="Close preview">✕ Preview</button>
             </div>
           </div>
@@ -162,6 +166,8 @@
   <script type="module" src="js/db.js"></script>
   <script type="module" src="js/fs.js"></script>
   <script type="module" src="js/runner.js"></script>
+  <script type="module" src="js/media-editor.js"></script>
+  <script type="module" src="js/html-visual.js"></script>
   <script type="module" src="js/terminal.js"></script>
   <script type="module" src="js/editor.js"></script>
   <script type="module" src="js/app.js"></script>
