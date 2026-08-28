@@ -10,21 +10,35 @@ let path = null;
 let docRoot = null;
 
 export function openHtmlVisual(filePath) {
-  path = filePath;
-  ensurePanel();
-  panel.classList.remove("hidden");
-  load(filePath);
+  try {
+    path = filePath || "/index.html";
+    ensurePanel();
+    panel.classList.remove("hidden");
+    panel.style.display = "flex";
+    load(path).catch((e) => {
+      console.error(e);
+      alert("HTML visual load error: " + e.message);
+    });
+  } catch (e) {
+    console.error(e);
+    alert("HTML visual error: " + e.message);
+  }
 }
 
 export function closeHtmlVisual() {
-  if (panel) panel.classList.add("hidden");
+  if (panel) {
+    panel.classList.add("hidden");
+    panel.style.display = "none";
+  }
 }
 
 function ensurePanel() {
-  if (panel) return;
+  if (panel && document.body.contains(panel)) return;
+  if (panel && !document.body.contains(panel)) panel = null;
   panel = document.createElement("div");
   panel.id = "html-visual";
-  panel.className = "html-visual hidden";
+  panel.className = "html-visual";
+  panel.style.display = "none";
   panel.innerHTML = `
     <div class="hv-header">
       <span>Visual HTML Editor</span>
