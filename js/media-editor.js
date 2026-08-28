@@ -4,7 +4,6 @@
  */
 
 import * as fs from "./fs.js";
-import { createBlobFromText } from "./runner.js";
 
 let panel = null;
 let canvas = null;
@@ -29,22 +28,40 @@ const FONTS = [
 ];
 
 export function openMediaEditor(path) {
-  sourcePath = path || null;
-  ensurePanel();
-  panel.classList.remove("hidden");
-  if (path) loadFromPath(path);
-  else resetCanvas(800, 600);
+  try {
+    sourcePath = path || null;
+    ensurePanel();
+    panel.classList.remove("hidden");
+    panel.style.display = "flex";
+    if (path) {
+      loadFromPath(path).catch((e) => {
+        console.error(e);
+        resetCanvas(800, 600);
+        alert("Could not load file: " + e.message + "\nBlank canvas opened instead.");
+      });
+    } else {
+      resetCanvas(800, 600);
+    }
+  } catch (e) {
+    console.error(e);
+    alert("Media editor error: " + e.message);
+  }
 }
 
 export function closeMediaEditor() {
-  if (panel) panel.classList.add("hidden");
+  if (panel) {
+    panel.classList.add("hidden");
+    panel.style.display = "none";
+  }
 }
 
 function ensurePanel() {
-  if (panel) return;
+  if (panel && document.body.contains(panel)) return;
+  if (panel && !document.body.contains(panel)) panel = null;
   panel = document.createElement("div");
   panel.id = "media-editor";
-  panel.className = "media-editor hidden";
+  panel.className = "media-editor";
+  panel.style.display = "none";
   panel.innerHTML = `
     <div class="me-header">
       <span class="me-title">Media / Meme Editor</span>
