@@ -157,6 +157,7 @@ async function bootApp() {
   await ed.initEditor();
   await refreshTree();
   window.refreshTree = refreshTree;
+  bindToolButtons(); // re-bind after UI is visible
   setStatus("Ready — encrypted & local");
 }
 
@@ -497,18 +498,59 @@ document.getElementById("btn-fs-editor").onclick = () => {
   toggleFs(document.getElementById("editor-area"));
 };
 
-// Media / HTML visual editors
-document.getElementById("btn-media").onclick = () => {
-  const p = window.__n3xnActivePath;
-  const ext = (p || "").split(".").pop()?.toLowerCase();
-  if (["mp4", "webm", "mov"].includes(ext)) media.openAVEditor(p, "video");
-  else if (["mp3", "wav", "ogg", "m4a"].includes(ext)) media.openAVEditor(p, "audio");
-  else media.openMediaEditor(p);
-};
-document.getElementById("btn-html-visual").onclick = () => {
-  const p = window.__n3xnActivePath || prompt("HTML file path:", "/index.html");
-  if (p) htmlVisual.openHtmlVisual(p);
-};
+// Media / HTML visual editors — bind safely
+function bindToolButtons() {
+  const mediaBtn = document.getElementById("btn-media");
+  const htmlBtn = document.getElementById("btn-html-visual");
+
+  if (mediaBtn) {
+    mediaBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        const p = window.__n3xnActivePath || null;
+        const ext = (p || "").split(".").pop()?.toLowerCase() || "";
+        setStatus("Opening Media editor…");
+        if (["mp4", "webm", "mov"].includes(ext)) media.openAVEditor(p, "video");
+        else if (["mp3", "wav", "ogg", "m4a"].includes(ext)) media.openAVEditor(p, "audio");
+        else media.openMediaEditor(p);
+        setStatus("Media editor open");
+      } catch (err) {
+        console.error(err);
+        alert("Media button error: " + err.message);
+        setStatus("Media editor failed");
+      }
+    };
+  }
+
+  if (htmlBtn) {
+    htmlBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      try {
+        let p = window.__n3xnActivePath;
+        if (!p || !/\.html?$/i.test(p)) {
+          p = prompt("HTML file path in VFS:", p || "/index.html");
+        }
+        if (!p) return;
+        setStatus("Opening HTML visual editor…");
+        htmlVisual.openHtmlVisual(p);
+        setStatus("HTML visual editor open");
+      } catch (err) {
+        console.error(err);
+        alert("HTML+ button error: " + err.message);
+        setStatus("HTML visual failed");
+      }
+    };
+  }
+}
+
+bindToolButtons();
+
+// Console helpers: openMediaEditor() / openHtmlVisual('/page.html')
+window.openMediaEditor = (p) => media.openMediaEditor(p || window.__n3xnActivePath || null);
+window.openHtmlVisual = (p) =>
+  htmlVisual.openHtmlVisual(p || window.__n3xnActivePath || "/index.html");
 
 document.addEventListener("fullscreenchange", () => {
   requestAnimationFrame(() => {
