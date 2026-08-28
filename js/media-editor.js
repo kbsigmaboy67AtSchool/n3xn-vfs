@@ -29,32 +29,32 @@ const FONTS = [
 
 function showPanelEl(el) {
   if (!el) return;
-  el.classList.remove("hidden");
-  el.style.cssText = [
-    "position:fixed",
-    "left:24px",
-    "right:24px",
-    "top:24px",
-    "bottom:24px",
-    "z-index:99999",
-    "display:flex",
-    "flex-direction:column",
-    "background:#0a0a0f",
-    "border:1px solid #333",
-    "box-shadow:0 0 40px rgba(255,255,255,0.15)",
-    "border-radius:6px",
-    "overflow:hidden",
-    "visibility:visible",
-    "opacity:1",
-    "pointer-events:auto",
-  ].join(";");
+  // Drop .hidden entirely so theme.css `.hidden { display:none !important }` cannot win
+  el.className = el.id === "html-visual" ? "html-visual" : "media-editor";
+  el.removeAttribute("hidden");
+  el.style.setProperty("display", "flex", "important");
+  el.style.setProperty("position", "fixed", "important");
+  el.style.setProperty("left", "24px", "important");
+  el.style.setProperty("right", "24px", "important");
+  el.style.setProperty("top", "24px", "important");
+  el.style.setProperty("bottom", "24px", "important");
+  el.style.setProperty("z-index", "99999", "important");
+  el.style.setProperty("visibility", "visible", "important");
+  el.style.setProperty("opacity", "1", "important");
+  el.style.setProperty("pointer-events", "auto", "important");
+  el.style.setProperty("flex-direction", "column", "important");
+  el.style.setProperty("background", "#0a0a0f", "important");
+  el.style.setProperty("overflow", "hidden", "important");
+  el.style.setProperty("border", "1px solid #444", "important");
+  el.style.setProperty("border-radius", "6px", "important");
 }
 
 function hidePanelEl(el) {
   if (!el) return;
-  el.classList.add("hidden");
-  el.style.display = "none";
-  el.style.visibility = "hidden";
+  el.className = (el.id === "html-visual" ? "html-visual" : "media-editor") + " hidden";
+  el.style.setProperty("display", "none", "important");
+  el.style.setProperty("visibility", "hidden", "important");
+  el.style.setProperty("pointer-events", "none", "important");
 }
 
 export function openMediaEditor(path) {
@@ -496,8 +496,9 @@ async function saveToVfs() {
 /* ========== Simple audio / video panel ========== */
 export function openAVEditor(path, kind) {
   ensurePanel();
-  panel.classList.remove("hidden");
+  showPanelEl(panel);
   const wrap = panel.querySelector(".me-canvas-wrap");
+  if (!wrap) return;
   wrap.innerHTML = "";
   const media = document.createElement(kind === "audio" ? "audio" : "video");
   media.controls = true;
