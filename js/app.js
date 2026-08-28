@@ -7,6 +7,8 @@ import * as fs from "./fs.js";
 import * as term from "./terminal.js";
 import * as ed from "./editor.js";
 import * as runner from "./runner.js";
+import * as media from "./media-editor.js";
+import * as htmlVisual from "./html-visual.js";
 
 // ========== AUTH ==========
 
@@ -412,6 +414,40 @@ document.getElementById("btn-run").onclick = () => runActiveFile();
 document.getElementById("btn-preview-close-bar").onclick = () => {
   window.__n3xnHidePreview();
 };
+
+// Fullscreen helpers
+function toggleFs(el) {
+  if (!el) return;
+  if (!document.fullscreenElement) el.requestFullscreen?.().catch(() => {});
+  else document.exitFullscreen?.();
+}
+
+document.getElementById("btn-fs-app").onclick = () => {
+  toggleFs(document.getElementById("app-screen"));
+};
+document.getElementById("btn-fs-editor").onclick = () => {
+  toggleFs(document.getElementById("editor-area"));
+};
+
+// Media / HTML visual editors
+document.getElementById("btn-media").onclick = () => {
+  const p = window.__n3xnActivePath;
+  const ext = (p || "").split(".").pop()?.toLowerCase();
+  if (["mp4", "webm", "mov"].includes(ext)) media.openAVEditor(p, "video");
+  else if (["mp3", "wav", "ogg", "m4a"].includes(ext)) media.openAVEditor(p, "audio");
+  else media.openMediaEditor(p);
+};
+document.getElementById("btn-html-visual").onclick = () => {
+  const p = window.__n3xnActivePath || prompt("HTML file path:", "/index.html");
+  if (p) htmlVisual.openHtmlVisual(p);
+};
+
+document.addEventListener("fullscreenchange", () => {
+  requestAnimationFrame(() => {
+    const inst = ed.getEditor && ed.getEditor();
+    if (inst) inst.layout();
+  });
+});
 
 // Collapsible terminal
 const termPanel = document.getElementById("terminal-panel");
