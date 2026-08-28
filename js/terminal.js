@@ -146,7 +146,16 @@ async function run(line) {
         await cmdRun(args);
         break;
       case "blobs":
+      case "blob":
         await cmdBlobs(args);
+        break;
+      case "webfile":
+      case "wf":
+        await cmdWebfile(args);
+        break;
+      case "curl":
+      case "fetch":
+        await cmdWebfile(["get", ...args]);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -447,20 +456,134 @@ async function cmdRun(args) {
 }
 
 async function cmdBlobs(args) {
+  const sub = args[0];
   const list = runner.listBlobs();
-  if (list.length === 0) {
-    print("No active blob URLs");
-    return;
-  }
-  if (args[0] === "clear" || args[0] === "revoke") {
+
+  if (sub === "clear" || sub === "revoke") {
     list.forEach((b) => runner.revokeBlob(b.url));
     print(`Revoked ${list.length} blob(s)`, "ok");
     return;
   }
+
+  if (sub === "make" || sub === "gen" || sub === "create") {
+    const filePath = resolve(args[1] || window.__n3xnActivePath);
+    if (!filePath) throw new Error("Usage: blob make <file>");
+    const { url, mime, size } = await runner.createBlobFromPath(filePath);
+    print(`Blob ready (${mime}, ${size}b)`, "ok");
+    print(`Open: ${url}`, "ok");
+    return;
+  }
+
+  if (sub === "open" && args[1] !== undefined) {
+    const idx = parseInt(args[1], 10);
+    const b = list[idx];
+    if (!b) throw new Error("No blob at index " + args[1]);
+    window.open(b.url, "_blank");
+    print(`Opened blob [${idx}] ${b.path}`, "ok");
+    return;
+  }
+
+  if (sub === "watch") {
+    // Generate blob immediately for listed files and print
+    const files = args.slice(1);
+    if (files.length === 0 && window.__n3xnActivePath) files.push(window.__n3xnActivePath);
+    if (files.length === 0) throw new Error("Usage: blob watch <file…>");
+    for (const f of files) {
+      const p = resolve(f);
+      await runner.createBlobFromPath(p);
+    }
+    print(`Watch blobs generated for ${files.length} file(s)`, "ok");
+    return;
+  }
+
+  // default: list all
+  if (list.length === 0) {
+    print("No active blob URLs. Use: blob make <file>  or  run <file>");
+    return;
+  }
+  print(`— ${list.length} blob(s) —`);
   list.forEach((b, i) => {
-    print(`[${i}] ${b.path} · ${b.mime} · ${b.size}b`);
-    print(`    ${b.url}`, "ok");
+    print(`[${i}] ${b.path} · ${b.mime} · ${b.size}b · ${new Date(b.created).toLocaleTimeString()}`);
+    print(`    blob:  ${b.url}`, "ok");
+    print(`    tip:   blob open ${i}   |   open in about:blank via browser`);
   });
+}
+
+/** webfile get|sync|put|headers <url> [vfs-path] */
+async function cmdWebfile(args) {
+  const sub = (args[0] || "get").toLowerCase();
+  const url = args[1];
+  if (!url && sub !== "help") {
+    print("Usage:");
+    print("  webfile get <url> [vfs-path]     — download URL into VFS");
+    print("  webfile sync <vfs-path> <url>    — overwrite file with URL body");
+    print("  webfile headers <url>            — show response headers");
+    print("  webfile put <vfs-path> <url>     — POST file body to URL (experimental)");
+    return;
+  }
+
+  if (sub === "headers") {
+    const res = await fetch(url, { method: "HEAD", mode: "cors" }).catch(() =>
+      fetch(url, { method: "GET", mode: "cors" })
+    );
+    print(`${res.status} ${res.statusText}`);
+    res.headers.forEach((v, k) => print(`  ${k}: ${v}`));
+    return;
+  }
+
+  if (sub === "get" || sub === "sync") {
+    let dest, fetchUrl;
+    if (sub === "sync") {
+      dest = resolve(args[1]);
+      fetchUrl = args[2];
+      if (!dest || !fetchUrl) throw new Error("Usage: webfile sync <vfs-path> <url>");
+    } else {
+      fetchUrl = url;
+      dest = args[2] ? resolve(args[2]) : resolve(cwd + "/" + (fetchUrl.split("/").pop() || "download.bin").split("?")[0]);
+    }
+
+    print(`Fetching ${fetchUrl}…`);
+    const res = await fetch(fetchUrl, { mode: "cors" });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const buf = new Uint8Array(await res.arrayBuffer());
+    const mime = res.headers.get("content-type") || "application/octet-stream";
+
+    // ensure parent dirs
+    const parts = dest.split("/").filter(Boolean);
+    parts.pop();
+    let cur = "";
+    for (const p of parts) {
+      cur += "/" + p;
+      if (!fs.exists(cur)) await fs.mkdir(cur);
+    }
+
+    await fs.writeFile(dest, buf, { mime: mime.split(";")[0].trim() });
+    print(`Saved ${buf.length} bytes → ${dest} (${mime})`, "ok");
+    const { url: blobUrl } = await runner.createBlobFromPath(dest);
+    print(`Blob: ${blobUrl}`, "ok");
+    if (window.refreshTree) window.refreshTree();
+    return;
+  }
+
+  if (sub === "put") {
+    const filePath = resolve(args[1]);
+    const postUrl = args[2];
+    if (!filePath || !postUrl) throw new Error("Usage: webfile put <vfs-path> <url>");
+    const f = await fs.readFile(filePath);
+    if (!f) throw new Error("File not found");
+    const res = await fetch(postUrl, {
+      method: "POST",
+      body: f.content,
+      headers: { "Content-Type": f.mime || "application/octet-stream" },
+      mode: "cors",
+    });
+    print(`${res.status} ${res.statusText}`, res.ok ? "ok" : "err");
+    const text = await res.text().catch(() => "");
+    if (text) print(text.slice(0, 500));
+    return;
+  }
+
+  print("Unknown webfile subcommand. Try: webfile get|sync|headers|put");
 }
 
 function showHelp() {
@@ -470,7 +593,8 @@ function showHelp() {
     "  mv, cp, find <pattern>, echo, whoami, stat, tree,",
     "  export [fs|path], patch <pat> <search> <replace> [--dry],",
     "  run [mode] <file>  — html|html-window|js|image|markdown|json|css|text|blob-open",
-    "  blobs [clear]      — list / revoke blob URLs from runs",
+    "  blob make|list|open|watch|clear <file|idx>",
+    "  webfile get|sync|headers|put   — fetch/sync URLs into VFS",
     "  cmd list|add|rm   — manage custom commands",
     "",
     "Custom commands can use: fs, db, print, args, cwd, resolve",
