@@ -142,30 +142,58 @@ async function bootApp() {
 
 // ========== FILE TREE ==========
 
-function refreshTree() {
+async function refreshTree() {
   const container = document.getElementById("file-tree");
+  if (!container) return;
   container.innerHTML = "";
-  renderNode(container, fs.getTree(), "/", 0);
+  let root = fs.getTree();
+  if (!root || !root.children) {
+    root = { type: "dir", children: {} };
+  }
+  const entries = Object.keys(root.children || {});
+  if (entries.length === 0) {
+    // Try rebuild from IndexedDB in case meta drifted
+    try {
+      await fs.rebuildTreeFromFiles();
+      root = fs.getTree();
+    } catch (e) {
+      console.warn(e);
+    }
+  }
+  const stillEmpty = !root.children || Object.keys(root.children).length === 0;
+  if (stillEmpty) {
+    const empty = document.createElement("div");
+    empty.className = "tree-empty";
+    empty.innerHTML = `<p>No files yet</p><p class="hint">New File · Import · Import FS</p>`;
+    container.appendChild(empty);
+    return;
+  }
+  renderNode(container, root, "/", 0);
 }
 
 function renderNode(container, node, path, depth) {
-  if (node.type !== "dir") return;
-  const entries = Object.entries(node.children).sort((a, b) => {
-    if (a[1].type !== b[1].type) return a[1].type === "dir" ? -1 : 1;
+  if (!node || node.type !== "dir") return;
+  const children = node.children || {};
+  const entries = Object.entries(children).sort((a, b) => {
+    const ta = a[1]?.type || "file";
+    const tb = b[1]?.type || "file";
+    if (ta !== tb) return ta === "dir" ? -1 : 1;
     return a[0].localeCompare(b[0]);
   });
 
   for (const [name, child] of entries) {
+    if (!child) continue;
     const full = path === "/" ? "/" + name : path + "/" + name;
     const item = document.createElement("div");
     item.className = "tree-item";
     item.style.paddingLeft = 10 + depth * 12 + "px";
-    item.innerHTML = `<span class="icon">${child.type === "dir" ? "📁" : "📄"}</span><span class="name">${name}</span>`;
+    const isDir = child.type === "dir";
+    item.innerHTML = `<span class="icon">${isDir ? "📁" : "📄"}</span><span class="name">${escapeTree(name)}</span>`;
     item.onclick = async () => {
       document.querySelectorAll(".tree-item").forEach((el) => el.classList.remove("active"));
       item.classList.add("active");
       document.getElementById("current-path").textContent = full;
-      if (child.type === "file") {
+      if (!isDir) {
         try {
           await ed.openFile(full);
         } catch (e) {
@@ -175,36 +203,41 @@ function renderNode(container, node, path, depth) {
     };
     item.oncontextmenu = (e) => {
       e.preventDefault();
-      // Simple context actions via prompt
       const action = prompt(`Actions for ${full}:\n1 = Rename\n2 = Delete\n3 = Download`, "2");
       if (action === "2") {
         if (confirm(`Delete ${full}?`)) {
-          fs.removeRecursive(full).then(refreshTree);
+          fs.removeRecursive(full).then(() => refreshTree());
         }
       } else if (action === "3") {
         downloadPath(full);
       } else if (action === "1") {
         const newName = prompt("New name:", name);
         if (newName && newName !== name) {
-          // simplistic rename via cp + rm
           const parent = full.split("/").slice(0, -1).join("/") || "/";
           const dest = parent === "/" ? "/" + newName : parent + "/" + newName;
           (async () => {
-            if (child.type === "file") {
+            if (!isDir) {
               const f = await fs.readFile(full);
               await fs.writeFile(dest, f.content, { mime: f.mime });
               await fs.remove(full);
             }
-            refreshTree();
+            await refreshTree();
           })();
         }
       }
     };
     container.appendChild(item);
-    if (child.type === "dir") {
+    if (isDir) {
       renderNode(container, child, full, depth + 1);
     }
   }
+}
+
+function escapeTree(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 // ========== SIDEBAR ACTIONS ==========
@@ -241,6 +274,21 @@ document.getElementById("btn-import").onclick = () => {
   if (choice === "1") document.getElementById("file-input").click();
   else if (choice === "2") document.getElementById("folder-input").click();
   else if (choice === "3") document.getElementById("zip-input").click();
+};
+
+document.getElementById("btn-import-fs").onclick = () => {
+  document.getElementById("json-import").click();
+};
+
+document.getElementById("btn-rebuild-tree").onclick = async () => {
+  setStatus("Rebuilding file tree…");
+  try {
+    await fs.rebuildTreeFromFiles();
+    await refreshTree();
+    setStatus("Tree rebuilt from storage");
+  } catch (e) {
+    setStatus("Rebuild failed: " + e.message);
+  }
 };
 
 document.getElementById("file-input").onchange = async (e) => {
