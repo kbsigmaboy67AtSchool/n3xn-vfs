@@ -27,17 +27,45 @@ const FONTS = [
   "system-ui, sans-serif",
 ];
 
+function showPanelEl(el) {
+  if (!el) return;
+  el.classList.remove("hidden");
+  el.style.cssText = [
+    "position:fixed",
+    "left:24px",
+    "right:24px",
+    "top:24px",
+    "bottom:24px",
+    "z-index:99999",
+    "display:flex",
+    "flex-direction:column",
+    "background:#0a0a0f",
+    "border:1px solid #333",
+    "box-shadow:0 0 40px rgba(255,255,255,0.15)",
+    "border-radius:6px",
+    "overflow:hidden",
+    "visibility:visible",
+    "opacity:1",
+    "pointer-events:auto",
+  ].join(";");
+}
+
+function hidePanelEl(el) {
+  if (!el) return;
+  el.classList.add("hidden");
+  el.style.display = "none";
+  el.style.visibility = "hidden";
+}
+
 export function openMediaEditor(path) {
   try {
     sourcePath = path || null;
     ensurePanel();
-    panel.classList.remove("hidden");
-    panel.style.display = "flex";
+    showPanelEl(panel);
     if (path) {
       loadFromPath(path).catch((e) => {
         console.error(e);
         resetCanvas(800, 600);
-        alert("Could not load file: " + e.message + "\nBlank canvas opened instead.");
       });
     } else {
       resetCanvas(800, 600);
@@ -49,42 +77,41 @@ export function openMediaEditor(path) {
 }
 
 export function closeMediaEditor() {
-  if (panel) {
-    panel.classList.add("hidden");
-    panel.style.display = "none";
-  }
+  hidePanelEl(panel);
 }
 
 function ensurePanel() {
-  if (panel && document.body.contains(panel)) return;
-  if (panel && !document.body.contains(panel)) panel = null;
+  if (panel && document.body.contains(panel)) {
+    canvas = panel.querySelector("#me-canvas");
+    ctx = canvas ? canvas.getContext("2d") : null;
+    return;
+  }
   panel = document.createElement("div");
   panel.id = "media-editor";
   panel.className = "media-editor";
-  panel.style.display = "none";
   panel.innerHTML = `
     <div class="me-header">
       <span class="me-title">Media / Meme Editor</span>
       <div class="me-header-actions">
-        <button class="btn small" id="me-fs" title="Fullscreen">⛶</button>
-        <button class="btn small ghost" id="me-close">✕</button>
+        <button type="button" class="btn small" id="me-fs" title="Fullscreen">⛶</button>
+        <button type="button" class="btn small ghost" id="me-close">✕</button>
       </div>
     </div>
     <div class="me-body">
       <div class="me-toolbar">
-        <button class="btn small" id="me-load" title="Load open file / path">Load</button>
-        <button class="btn small" id="me-url" title="Insert image/GIF from URL">+ URL</button>
-        <button class="btn small" id="me-text" title="Add text">+ Text</button>
-        <button class="btn small" id="me-svg" title="Insert SVG code">+ SVG</button>
-        <button class="btn small" id="me-rotate" title="Rotate 90°">↻</button>
-        <button class="btn small" id="me-crop" title="Crop mode">Crop</button>
-        <button class="btn small primary" id="me-export">Export PNG</button>
-        <button class="btn small" id="me-export-jpg">JPG</button>
-        <button class="btn small" id="me-save-vfs">Save to VFS</button>
+        <button type="button" class="btn small" id="me-load">Load</button>
+        <button type="button" class="btn small" id="me-url">+ URL</button>
+        <button type="button" class="btn small" id="me-text">+ Text</button>
+        <button type="button" class="btn small" id="me-svg">+ SVG</button>
+        <button type="button" class="btn small" id="me-rotate">↻</button>
+        <button type="button" class="btn small" id="me-crop">Crop</button>
+        <button type="button" class="btn small primary" id="me-export">Export PNG</button>
+        <button type="button" class="btn small" id="me-export-jpg">JPG</button>
+        <button type="button" class="btn small" id="me-save-vfs">Save to VFS</button>
       </div>
       <div class="me-workspace">
         <div class="me-canvas-wrap">
-          <canvas id="me-canvas"></canvas>
+          <canvas id="me-canvas" width="800" height="600"></canvas>
         </div>
         <div class="me-props">
           <h4>Layer props</h4>
@@ -106,17 +133,17 @@ function ensurePanel() {
           <label>Y</label>
           <input type="number" id="me-prop-y" value="60" />
           <div class="me-layer-list" id="me-layers"></div>
-          <button class="btn small ghost" id="me-del-layer">Delete layer</button>
+          <button type="button" class="btn small ghost" id="me-del-layer">Delete layer</button>
         </div>
       </div>
     </div>
   `;
   document.body.appendChild(panel);
 
-  canvas = document.getElementById("me-canvas");
+  canvas = panel.querySelector("#me-canvas");
   ctx = canvas.getContext("2d");
 
-  const fontSel = document.getElementById("me-prop-font");
+  const fontSel = panel.querySelector("#me-prop-font");
   FONTS.forEach((f) => {
     const o = document.createElement("option");
     o.value = f;
@@ -124,27 +151,27 @@ function ensurePanel() {
     fontSel.appendChild(o);
   });
 
-  document.getElementById("me-close").onclick = closeMediaEditor;
-  document.getElementById("me-fs").onclick = () => {
+  panel.querySelector("#me-close").onclick = () => closeMediaEditor();
+  panel.querySelector("#me-fs").onclick = () => {
     if (!document.fullscreenElement) panel.requestFullscreen?.();
     else document.exitFullscreen?.();
   };
-  document.getElementById("me-load").onclick = async () => {
+  panel.querySelector("#me-load").onclick = async () => {
     const p = window.__n3xnActivePath || prompt("VFS path to load:");
     if (p) await loadFromPath(p);
   };
-  document.getElementById("me-url").onclick = () => insertFromUrl();
-  document.getElementById("me-text").onclick = () => addTextLayer("TOP TEXT");
-  document.getElementById("me-svg").onclick = () => insertSvg();
-  document.getElementById("me-rotate").onclick = () => {
+  panel.querySelector("#me-url").onclick = () => insertFromUrl();
+  panel.querySelector("#me-text").onclick = () => addTextLayer("TOP TEXT");
+  panel.querySelector("#me-svg").onclick = () => insertSvg();
+  panel.querySelector("#me-rotate").onclick = () => {
     rotation = (rotation + 90) % 360;
     redraw();
   };
-  document.getElementById("me-crop").onclick = () => startCrop();
-  document.getElementById("me-export").onclick = () => exportImage("image/png");
-  document.getElementById("me-export-jpg").onclick = () => exportImage("image/jpeg");
-  document.getElementById("me-save-vfs").onclick = () => saveToVfs();
-  document.getElementById("me-del-layer").onclick = () => {
+  panel.querySelector("#me-crop").onclick = () => startCrop();
+  panel.querySelector("#me-export").onclick = () => exportImage("image/png");
+  panel.querySelector("#me-export-jpg").onclick = () => exportImage("image/jpeg");
+  panel.querySelector("#me-save-vfs").onclick = () => saveToVfs();
+  panel.querySelector("#me-del-layer").onclick = () => {
     if (selectedLayer >= 0) {
       layers.splice(selectedLayer, 1);
       selectedLayer = -1;
@@ -154,8 +181,10 @@ function ensurePanel() {
   };
 
   ["me-prop-text", "me-prop-font", "me-prop-size", "me-prop-color", "me-prop-stroke", "me-prop-bg", "me-prop-bg-on", "me-prop-x", "me-prop-y"].forEach((id) => {
-    document.getElementById(id).addEventListener("input", applyPropsToSelected);
-    document.getElementById(id).addEventListener("change", applyPropsToSelected);
+    const el = panel.querySelector("#" + id);
+    if (!el) return;
+    el.addEventListener("input", applyPropsToSelected);
+    el.addEventListener("change", applyPropsToSelected);
   });
 
   // Drag layers
