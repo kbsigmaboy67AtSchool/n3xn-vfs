@@ -115,25 +115,41 @@ document.getElementById("json-import").onchange = async (e) => {
   if (!file) return;
   try {
     const text = await file.text();
-    const json = JSON.parse(text);
-    const pass = prompt("Password for this encrypted FS export:");
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      throw new Error("File is not valid JSON");
+    }
+    const pass = prompt(
+      "Password for this export" +
+        (db.getCurrentUser()
+          ? " (files merge into your current account if export account password differs)"
+          : "") +
+        ":"
+    );
     if (!pass) return;
     setStatus("Importing filesystem…");
-    const user = await db.importEverything(json, pass);
-    // If already in app, reload tree for current session
+    const result = await db.importEverything(json, pass, {
+      mergeIntoCurrent: !!db.getCurrentUser(),
+    });
+    const user = result.username || result;
+    const n = result.files != null ? result.files : "?";
     if (db.getCurrentUser()) {
       await fs.loadTree();
       await fs.rebuildTreeFromFiles();
       await refreshTree();
-      setStatus(`FS imported for ${user}`);
-      alert(`Filesystem imported for ${user}. Tree refreshed.`);
+      setStatus(`FS imported: ${n} files → ${user}`);
+      alert(`Imported ${n} file(s) into account "${user}". Tree rebuilt.`);
     } else {
-      alert(`Imported as ${user}. Sign in with that account.`);
+      alert(`Imported for ${user}. Sign in with that account + password.`);
       refreshAccountList();
-      document.getElementById("account-select").value = user;
+      const sel = document.getElementById("account-select");
+      if (sel) sel.value = user;
     }
   } catch (err) {
-    alert("Import failed: " + err.message);
+    console.error(err);
+    alert("Import failed: " + (err.message || err));
     setStatus("Import failed");
   }
   e.target.value = "";
