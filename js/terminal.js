@@ -5,6 +5,7 @@
 import * as fs from "./fs.js";
 import * as db from "./db.js";
 import * as runner from "./runner.js";
+import * as collab from "./collab.js";
 
 const outputEl = () => document.getElementById("terminal-output");
 const inputEl = () => document.getElementById("terminal-input");
@@ -18,7 +19,8 @@ export function initTerminal() {
   const input = inputEl();
   input.addEventListener("keydown", onKey);
   print("n3xn Virtual FileSystem v2 — Terminal", "ok");
-  print('Type "help" for commands. Everything is encrypted & local.', "out");
+  print('Type "help" for commands. WSS: wss connect | collab | share', "out");
+  collab.setLogger((msg, cls) => print(msg, cls || "out"));
   loadCustomCommands();
 }
 
@@ -156,6 +158,17 @@ async function run(line) {
       case "curl":
       case "fetch":
         await cmdWebfile(["get", ...args]);
+        break;
+      case "wss":
+      case "collab":
+      case "room":
+        await cmdWss(args);
+        break;
+      case "share":
+        await cmdWss(["share", ...args]);
+        break;
+      case "chat":
+        await cmdWss(["chat", ...args]);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -586,6 +599,96 @@ async function cmdWebfile(args) {
   print("Unknown webfile subcommand. Try: webfile get|sync|headers|put");
 }
 
+/**
+ * wss connect <url> [roomPassword]
+ * wss disconnect | status | chat <msg> | share <path> | pull <path>
+ * wss collab <path> | leave | ping
+ *
+ * Room password is E2E only (relay never sees plaintext).
+ * URL example: wss://your-worker.workers.dev/my-room
+ */
+async function cmdWss(args) {
+  const sub = (args[0] || "status").toLowerCase();
+
+  if (sub === "help" || sub === "-h") {
+    print("Encrypted WSS over your CF Universal Relay:");
+    print("  wss connect <wss-url> [roomPassword]");
+    print("  wss disconnect");
+    print("  wss status");
+    print("  wss chat <message>");
+    print("  wss share <vfs-path>     — send file to room (chunked E2E)");
+    print("  wss pull <vfs-path>      — request file from peers");
+    print("  wss collab <vfs-path>    — live text collab on file");
+    print("  wss leave                — leave collab session");
+    print("  wss ping");
+    print("Room password encrypts all app traffic; relay only sees ciphertext.");
+    return;
+  }
+
+  if (sub === "connect") {
+    const url = args[1];
+    if (!url) throw new Error("Usage: wss connect <wss://host/room> [roomPassword]");
+    let pass = args[2];
+    if (!pass) pass = prompt("Room E2E password (shared with teammates):");
+    if (!pass) throw new Error("Room password required");
+    await collab.connect(url, pass);
+    print("Connected. Use: chat · share · pull · collab", "ok");
+    return;
+  }
+
+  if (sub === "disconnect" || sub === "close") {
+    await collab.disconnect();
+    return;
+  }
+
+  if (sub === "status") {
+    const s = collab.getStatus();
+    print(JSON.stringify(s, null, 2));
+    return;
+  }
+
+  if (sub === "chat") {
+    const text = args.slice(1).join(" ");
+    if (!text) throw new Error("Usage: wss chat <message>");
+    await collab.chat(text);
+    return;
+  }
+
+  if (sub === "share") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    if (!path) throw new Error("Usage: wss share <path>");
+    await collab.shareFile(path);
+    return;
+  }
+
+  if (sub === "pull") {
+    const path = resolve(args[1]);
+    if (!path) throw new Error("Usage: wss pull <path>");
+    await collab.pullFile(path);
+    return;
+  }
+
+  if (sub === "collab" || sub === "join") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    if (!path) throw new Error("Usage: wss collab <text-file-path>");
+    await collab.collabJoin(path);
+    print("Edits sync ~350ms after typing while this file is active", "ok");
+    return;
+  }
+
+  if (sub === "leave") {
+    collab.collabLeave();
+    return;
+  }
+
+  if (sub === "ping") {
+    await collab.ping();
+    return;
+  }
+
+  print('Unknown wss subcommand. Try: wss help');
+}
+
 function showHelp() {
   const lines = [
     "Built-in commands:",
@@ -595,10 +698,11 @@ function showHelp() {
     "  run [mode] <file>  — html|html-window|js|image|markdown|json|css|text|blob-open",
     "  blob make|list|open|watch|clear <file|idx>",
     "  webfile get|sync|headers|put   — fetch/sync URLs into VFS",
+    "  wss connect|chat|share|pull|collab|status|disconnect",
     "  cmd list|add|rm   — manage custom commands",
     "",
-    "Custom commands can use: fs, db, print, args, cwd, resolve",
-    "Everything is encrypted at rest. Local only.",
+    "WSS is E2E encrypted (room password). Relay is opaque broadcast.",
+    "VFS files stay encrypted at rest. Local + optional collab room.",
   ];
   lines.forEach((l) => print(l));
 }
