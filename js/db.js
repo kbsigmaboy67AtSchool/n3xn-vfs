@@ -254,40 +254,95 @@ export async function exportEverything(includeAccounts = true) {
   };
 }
 
-export async function importEverything(json, password) {
+/**
+ * Import encrypted or plain n3xn export.
+ * @param {object} json - parsed export
+ * @param {string} password - export encryption password AND/OR account password
+ * @param {{ mergeIntoCurrent?: boolean, username?: string }} opts
+ */
+export async function importEverything(json, password, opts = {}) {
   let data;
-  if (json.encrypted) {
-    const plain = await decrypt(fromBase64(json.encrypted), password);
-    data = JSON.parse(new TextDecoder().decode(plain));
-  } else {
-    data = json;
+  try {
+    if (json && json.encrypted) {
+      const plain = await decrypt(fromBase64(json.encrypted), password);
+      data = JSON.parse(new TextDecoder().decode(plain));
+    } else if (json && (json.files || json.n3xn || json.version)) {
+      data = json;
+    } else {
+      throw new Error("Not a valid n3xn export (missing encrypted payload or files)");
+    }
+  } catch (e) {
+    throw new Error("Decrypt/parse failed — wrong password or corrupt file: " + (e.message || e));
   }
 
-  if (!data.username) throw new Error("Invalid export");
+  const targetUser =
+    opts.username ||
+    (opts.mergeIntoCurrent && currentUser) ||
+    data.username ||
+    currentUser;
 
-  // Ensure account exists or create
+  if (!targetUser) {
+    throw new Error("No username in export and not logged in — create/sign in first");
+  }
+
+  // Ensure account row exists
   const accounts = listAccounts();
-  if (!accounts.find((a) => a.username === data.username)) {
-    // Create with provided password
-    await createAccount(data.username, password);
+  const existing = accounts.find((a) => a.username === targetUser);
+  if (!existing) {
+    try {
+      await createAccount(targetUser, password);
+    } catch (e) {
+      // race / already exists
+      if (!String(e.message || e).includes("already")) throw e;
+    }
   }
 
-  await login(data.username, password);
-
-  // Restore files
-  for (const [path, info] of Object.entries(data.files || {})) {
-    const content = fromBase64(info.content);
-    await putFile(path, content, {
-      mime: info.mime,
-      modified: info.modified,
-    });
+  // Login as target (may fail if account password differs from export password)
+  if (!currentUser || currentUser !== targetUser) {
+    try {
+      await login(targetUser, password);
+    } catch (e) {
+      if (currentUser && opts.mergeIntoCurrent) {
+        // stay on current session — export password only unlocked the blob
+      } else {
+        throw new Error(
+          "Could not sign in as " +
+            targetUser +
+            " with that password. Sign in first, then Import FS to merge into current account. (" +
+            (e.message || e) +
+            ")"
+        );
+      }
+    }
   }
 
-  if (data.meta?.root) {
-    await setMeta("root", data.meta.root);
+  if (!currentUser) throw new Error("Not logged in after import");
+
+  const files = data.files || {};
+  let count = 0;
+  for (const [path, info] of Object.entries(files)) {
+    try {
+      const content = fromBase64(info.content);
+      await putFile(path, content, {
+        mime: info.mime,
+        modified: info.modified,
+      });
+      count++;
+    } catch (e) {
+      console.warn("import file failed", path, e);
+    }
   }
 
-  return data.username;
+  // Prefer rebuilding tree from files; optional meta.root if present
+  if (data.meta?.root && !opts.mergeIntoCurrent) {
+    try {
+      await setMeta("root", data.meta.root);
+    } catch (e) {
+      console.warn("meta root restore failed", e);
+    }
+  }
+
+  return { username: currentUser, files: count };
 }
 
 function guessMime(path) {
