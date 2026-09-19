@@ -118,6 +118,7 @@ export function detectRunner(path) {
   const e = extOf(path);
   if (["html", "htm"].includes(e)) return "html-window";
   if (["js", "mjs", "cjs"].includes(e)) return "js";
+  if (e === "py") return "python";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -404,6 +405,23 @@ export async function runText(path) {
   return url;
 }
 
+/* ========== Python (Pyodide) ========== */
+export async function runPython(path) {
+  const py = await import("./python.js");
+  py.setPythonLogger((msg, cls) => {
+    const el = document.getElementById("terminal-output");
+    if (el) {
+      const line = document.createElement("div");
+      line.className = cls || "out";
+      line.textContent = msg;
+      el.appendChild(line);
+      el.scrollTop = el.scrollHeight;
+    }
+  });
+  await py.runPythonFile(path, (p) => import("./fs.js").then((fs) => fs.readFile(p)));
+  termPrint(`Python finished: ${path}`, "ok");
+}
+
 /* ========== Dispatcher ========== */
 export async function run(path, mode) {
   if (!path) throw new Error("No file path");
@@ -416,6 +434,9 @@ export async function run(path, mode) {
       return runHtmlWindow(path);
     case "js":
       return runJs(path);
+    case "python":
+    case "py":
+      return runPython(path);
     case "image":
       return runImage(path);
     case "markdown":
