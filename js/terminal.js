@@ -6,6 +6,7 @@ import * as fs from "./fs.js";
 import * as db from "./db.js";
 import * as runner from "./runner.js";
 import * as collab from "./collab.js";
+import * as python from "./python.js";
 
 const outputEl = () => document.getElementById("terminal-output");
 const inputEl = () => document.getElementById("terminal-input");
@@ -19,9 +20,49 @@ export function initTerminal() {
   const input = inputEl();
   input.addEventListener("keydown", onKey);
   print("n3xn Virtual FileSystem v2 — Terminal", "ok");
-  print('Type "help" for commands. WSS: wss connect | collab | share', "out");
+  print('help · python · wss · logs on|off|copy|clear', "out");
   collab.setLogger((msg, cls) => print(msg, cls || "out"));
+  python.setPythonLogger((msg, cls) => print(msg, cls || "out"));
+  installConsoleBridge();
   loadCustomCommands();
+}
+
+let consoleBridgeOn = true;
+let _origConsole = null;
+
+function installConsoleBridge() {
+  if (_origConsole) return;
+  _origConsole = {
+    log: console.log.bind(console),
+    warn: console.warn.bind(console),
+    error: console.error.bind(console),
+    info: console.info.bind(console),
+  };
+  const bridge = (level, args) => {
+    _origConsole[level](...args);
+    if (!consoleBridgeOn) return;
+    const msg = args
+      .map((a) => {
+        try {
+          return typeof a === "object" ? JSON.stringify(a) : String(a);
+        } catch {
+          return String(a);
+        }
+      })
+      .join(" ");
+    const cls = level === "error" ? "err" : level === "warn" ? "err" : "out";
+    print(`[${level}] ${msg}`, cls);
+  };
+  console.log = (...a) => bridge("log", a);
+  console.warn = (...a) => bridge("warn", a);
+  console.error = (...a) => bridge("error", a);
+  console.info = (...a) => bridge("info", a);
+  window.addEventListener("error", (e) => {
+    if (consoleBridgeOn) print(`[error] ${e.message} @ ${e.filename}:${e.lineno}`, "err");
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    if (consoleBridgeOn) print(`[reject] ${e.reason}`, "err");
+  });
 }
 
 function print(text, cls = "out") {
@@ -169,6 +210,14 @@ async function run(line) {
         break;
       case "chat":
         await cmdWss(["chat", ...args]);
+        break;
+      case "python":
+      case "py":
+        await cmdPython(args);
+        break;
+      case "logs":
+      case "console":
+        await cmdLogs(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -689,6 +738,48 @@ async function cmdWss(args) {
   print('Unknown wss subcommand. Try: wss help');
 }
 
+async function cmdPython(args) {
+  if (args[0] === "canvas") {
+    python.showGameCanvas();
+    print("Game canvas shown", "ok");
+    return;
+  }
+  if (args[0] === "hide") {
+    python.hideGameCanvas();
+    return;
+  }
+  // py <file>  or  py -c "code"
+  if (args[0] === "-c") {
+    const code = args.slice(1).join(" ");
+    await python.runPython(code, { showCanvas: /canvas|arcade/i.test(code) });
+    return;
+  }
+  const path = resolve(args[0] || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: python <file.py> | python -c <code> | python canvas");
+  await python.runPythonFile(path, (p) => fs.readFile(p));
+}
+
+async function cmdLogs(args) {
+  const sub = (args[0] || "status").toLowerCase();
+  if (sub === "on") {
+    consoleBridgeOn = true;
+    print("Console → terminal ON", "ok");
+  } else if (sub === "off") {
+    consoleBridgeOn = false;
+    print("Console → terminal OFF", "ok");
+  } else if (sub === "copy") {
+    const el = outputEl();
+    const text = el ? el.innerText : "";
+    await navigator.clipboard.writeText(text);
+    print("Logs copied to clipboard", "ok");
+  } else if (sub === "clear") {
+    outputEl().innerHTML = "";
+  } else {
+    print(`Console bridge: ${consoleBridgeOn ? "ON" : "OFF"}`);
+    print("Usage: logs on|off|copy|clear");
+  }
+}
+
 function showHelp() {
   const lines = [
     "Built-in commands:",
@@ -699,6 +790,8 @@ function showHelp() {
     "  blob make|list|open|watch|clear <file|idx>",
     "  webfile get|sync|headers|put   — fetch/sync URLs into VFS",
     "  wss connect|chat|share|pull|collab|status|disconnect",
+    "  python <file.py> | python -c <code> | python canvas",
+    "  logs on|off|copy|clear  — mirror browser console to terminal",
     "  cmd list|add|rm   — manage custom commands",
     "",
     "WSS is E2E encrypted (room password). Relay is opaque broadcast.",
