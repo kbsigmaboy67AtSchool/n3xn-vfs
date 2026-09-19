@@ -167,17 +167,7 @@
   <input type="file" id="zip-input" accept=".zip" hidden />
   <input type="file" id="json-import" accept=".json,.n3xn" hidden />
 
-  <script type="module" src="js/crypto.js"></script>
-  <script type="module" src="js/db.js"></script>
-  <script type="module" src="js/fs.js"></script>
-  <script type="module" src="js/runner.js"></script>
-  <script type="module" src="js/collab.js"></script>
-  <script type="module" src="js/python.js"></script>
-  <script type="module" src="js/monaco-settings.js"></script>
-  <script type="module" src="js/media-editor.js"></script>
-  <script type="module" src="js/html-visual.js"></script>
-  <script type="module" src="js/terminal.js"></script>
-  <script type="module" src="js/editor.js"></script>
+  <!-- Single entry: app.js imports the rest. Avoids MIME failures from missing optional scripts. -->
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
