@@ -7,10 +7,11 @@
  * kind: script | script-module | css | stylesheet | link | style | any (→ link)
  * method: blob | data   (default blob)
  *
- * Example:
+ * Example (absolute or relative to this .n3-site file):
  *   _;:(text/css)[stylesheet]{/css/app.css}blob
- *   _;:(text/javascript)[script]{/js/app.js}data
- *   _;:(application/javascript)[script-module]{/js/main.js}blob
+ *   _;:(text/css)[stylesheet]{./styles.css}blob
+ *   _;:(text/javascript)[script]{../shared/app.js}data
+ *   _;:(application/javascript)[script-module]{js/main.js}blob
  *
  * Runtime helpers (injected when running):
  *   n3xn.link(path, { mime, method, headers })
@@ -36,6 +37,49 @@ const KIND_MAP = {
   any: "link",
 };
 
+/** Directory of a VFS file path, always absolute, no trailing slash except root */
+export function dirname(filePath) {
+  const p = normalizeAbs(filePath);
+  const i = p.lastIndexOf("/");
+  if (i <= 0) return "/";
+  return p.slice(0, i) || "/";
+}
+
+/** Normalize to absolute VFS path with single leading slash, no trailing slash (except root) */
+export function normalizeAbs(path) {
+  let p = String(path || "").replace(/\\/g, "/").trim();
+  if (!p) return "/";
+  // strip file:// or leading ./ clutter
+  p = p.replace(/^file:\/\//, "");
+  if (!p.startsWith("/")) p = "/" + p;
+  const parts = [];
+  for (const seg of p.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") {
+      if (parts.length) parts.pop();
+      continue;
+    }
+    parts.push(seg);
+  }
+  return "/" + parts.join("/");
+}
+
+/**
+ * Resolve a directive path against the current .n3-site file location.
+ * - Absolute (/foo/bar) → as-is (normalized)
+ * - Relative (./x, ../x, x) → relative to baseDir (site file's folder)
+ */
+export function resolveSitePath(ref, baseDir = "/") {
+  const r = String(ref || "").trim();
+  if (!r) throw new Error("empty path");
+  if (r.startsWith("/")) return normalizeAbs(r);
+  const base = baseDir === "/" ? "/" : normalizeAbs(baseDir);
+  // join base + relative
+  const joined = (base === "/" ? "" : base) + "/" + r;
+  return normalizeAbs(joined);
+}
+
+
 function mimeOf(path, override) {
   if (override && override.trim()) return override.trim();
   const ext = path.split(".").pop()?.toLowerCase();
@@ -60,7 +104,7 @@ function mimeOf(path, override) {
 }
 
 async function readPath(path) {
-  const p = path.startsWith("/") ? path : "/" + path;
+  const p = normalizeAbs(path);
   const f = await fs.readFile(p);
   if (!f) throw new Error("n3-site: file not found: " + p);
   return f;
@@ -68,8 +112,9 @@ async function readPath(path) {
 
 /** Build blob: or data: URL from VFS file */
 export async function makeLink(path, opts = {}) {
-  const f = await readPath(path);
-  const mime = opts.mime || f.mime || mimeOf(path);
+  const resolved = resolveSitePath(path, opts.baseDir || "/");
+  const f = await readPath(resolved);
+  const mime = opts.mime || f.mime || mimeOf(resolved);
   const method = (opts.method || "blob").toLowerCase();
   if (method === "data") {
     let s = "";
@@ -81,7 +126,7 @@ export async function makeLink(path, opts = {}) {
       url: `data:${mime};base64,${btoa(s)}`,
       mime,
       method: "data",
-      path: path.startsWith("/") ? path : "/" + path,
+      path: resolved,
       size: f.content.length,
     };
   }
@@ -91,7 +136,7 @@ export async function makeLink(path, opts = {}) {
     url,
     mime,
     method: "blob",
-    path: path.startsWith("/") ? path : "/" + path,
+    path: resolved,
     size: f.content.length,
     blob,
   };
@@ -116,9 +161,15 @@ function tagFor(kind, url, mime) {
  * Expand all _;:(...)[...]{...} directives in source HTML.
  * Returns { html, assets: [{path,url,method,mime}] }
  */
-export async function expandN3Site(source) {
+export async function expandN3Site(source, baseDir = "/") {
   const assets = [];
   let html = source;
+  // baseDir may be the .n3-site file path or a directory
+  const rawBase = String(baseDir || "/");
+  const siteBase =
+    rawBase.endsWith("/") || rawBase === "/"
+      ? normalizeAbs(rawBase === "/" ? "/" : rawBase.replace(/\/$/, "") || "/")
+      : dirname(rawBase);
 
   const matches = [...source.matchAll(DIR_RE)];
   // replace from end to keep indices stable
@@ -130,14 +181,14 @@ export async function expandN3Site(source) {
     const path = m[3].trim();
     const method = (m[4] || "blob").toLowerCase();
     try {
-      const link = await makeLink(path, { mime: ctype || undefined, method });
+      const link = await makeLink(path, { mime: ctype || undefined, method, baseDir: siteBase });
       assets.push(link);
       const inject = tagFor(kind, link.url, link.mime);
       html = html.slice(0, m.index) + inject + html.slice(m.index + full.length);
     } catch (e) {
-      const err = `<!-- n3-site error ${path}: ${e.message} -->`;
+      const err = `<!-- n3-site error ${path} (base ${siteBase}): ${e.message} -->`;
       html = html.slice(0, m.index) + err + html.slice(m.index + full.length);
-      assets.push({ path, error: e.message });
+      assets.push({ path, error: e.message, base: siteBase });
     }
   }
 
@@ -170,11 +221,12 @@ window.n3xn = window.n3xn || {
 
 /** Run expanded site in new window or in-app preview */
 export async function runN3Site(path, { target = "window" } = {}) {
-  const f = await fs.readFile(path);
-  if (!f) throw new Error("File not found: " + path);
+  const abs = normalizeAbs(path);
+  const f = await fs.readFile(abs);
+  if (!f) throw new Error("File not found: " + abs);
   const source = f.text();
-  const { html, assets } = await expandN3Site(source);
-  const { url } = createBlobFromText(html, "text/html", `n3-site:${path}`);
+  const { html, assets } = await expandN3Site(source, abs);
+  const { url } = createBlobFromText(html, "text/html", `n3-site:${abs}`);
   const errs = assets.filter((a) => a.error);
   return { url, assets, errors: errs, html };
 }
