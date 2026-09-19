@@ -9,7 +9,11 @@ import * as ed from "./editor.js";
 import * as runner from "./runner.js";
 import * as media from "./media-editor.js";
 import * as htmlVisual from "./html-visual.js";
-import * as monacoSettings from "./monaco-settings.js";
+
+// Optional modules — dynamic so a missing/CDN MIME failure cannot blank the auth UI
+async function loadMonacoSettings() {
+  return import("./monaco-settings.js");
+}
 
 // ========== AUTH ==========
 
@@ -27,15 +31,25 @@ function showApp() {
 
 function refreshAccountList() {
   const select = document.getElementById("account-select");
-  const accounts = db.listAccounts();
+  if (!select) return;
   select.innerHTML = "";
+  let accounts = [];
+  try {
+    accounts = db.listAccounts() || [];
+  } catch (e) {
+    console.error("listAccounts failed", e);
+    accounts = [];
+  }
   if (accounts.length === 0) {
-    select.innerHTML = '<option value="">No accounts — create one</option>';
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No accounts — create one";
+    select.appendChild(opt);
   } else {
     accounts.forEach((a) => {
       const opt = document.createElement("option");
       opt.value = a.username;
-      opt.textContent = a.username;
+      opt.textContent = a.username || "(unnamed)";
       select.appendChild(opt);
     });
   }
@@ -517,8 +531,9 @@ document.getElementById("btn-fs-editor").onclick = () => {
 
 const msBtn = document.getElementById("btn-monaco-settings");
 if (msBtn) {
-  msBtn.onclick = () => {
+  msBtn.onclick = async () => {
     try {
+      const monacoSettings = await loadMonacoSettings();
       monacoSettings.defineExtraThemes();
       monacoSettings.openSettingsDrawer();
     } catch (e) {
@@ -526,6 +541,14 @@ if (msBtn) {
     }
   };
 }
+
+// Surface load errors instead of a silent blank UI
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("Unhandled rejection", e.reason);
+});
+window.addEventListener("error", (e) => {
+  console.error("Script error", e.message, e.filename);
+});
 
 // Media / HTML visual editors — bind safely
 function bindToolButtons() {
