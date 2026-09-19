@@ -1075,7 +1075,7 @@ async function cmdN3Site(args) {
     const path = resolve(args[1] || window.__n3xnActivePath);
     const f = await fs.readFile(path);
     if (!f) throw new Error("not found");
-    const { html, assets } = await site.expandN3Site(f.text());
+    const { html, assets } = await site.expandN3Site(f.text(), path);
     assets.forEach((a) => print((a.error ? "ERR " : "OK  ") + (a.path || "") + " " + (a.url || a.error || "")));
     print("expanded HTML length " + html.length, "ok");
     return;
