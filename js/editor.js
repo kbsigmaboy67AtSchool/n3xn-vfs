@@ -46,54 +46,36 @@ export function initEditor() {
   if (monacoLoading) return monacoLoading;
 
   monacoLoading = (async () => {
-    const VER = "0.52.0";
-    // Prefer same-origin SW proxy so workers are not cross-origin
     let useProxy = false;
     try {
       if (window.__n3xnSwReady) await window.__n3xnSwReady;
-      // Only proxy when SW actually controls this page (otherwise /__monaco__/ is 404 HTML)
       useProxy = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
     } catch (_) {
       useProxy = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
     }
 
+    const VER = "0.52.0";
     const origin = location.origin;
-    const MONACO_VS = useProxy
-      ? origin + "/__monaco__/npm/monaco-editor@" + VER + "/min/vs"
-      : "https://cdn.jsdelivr.net/npm/monaco-editor@" + VER + "/min/vs";
+    // Base URL must end with /min/ for workerMain AMD (not /min/vs/)
+    const MONACO_MIN = useProxy
+      ? origin + "/__monaco__/npm/monaco-editor@" + VER + "/min/"
+      : "https://cdn.jsdelivr.net/npm/monaco-editor@" + VER + "/min/";
+    const MONACO_VS = MONACO_MIN + "vs";
 
-    // Workers only when SW proxy is active (same-origin). CDN importScripts often fails (CORS/filter).
-    if (useProxy) {
-      self.MonacoEnvironment = {
-        getWorkerUrl: function (_id, label) {
-          const map = {
-            json: "language/json/jsonWorker.js",
-            css: "language/css/cssWorker.js",
-            scss: "language/css/cssWorker.js",
-            less: "language/css/cssWorker.js",
-            html: "language/html/htmlWorker.js",
-            handlebars: "language/html/htmlWorker.js",
-            razor: "language/html/htmlWorker.js",
-            typescript: "language/typescript/tsWorker.js",
-            javascript: "language/typescript/tsWorker.js",
-          };
-          const rel = map[label] || "base/worker/workerMain.js";
-          return MONACO_VS + "/" + rel;
-        },
-      };
-    } else {
-      // Main-thread mode until SW controls the page (after one reload)
-      self.MonacoEnvironment = {
-        getWorker: function () {
-          return {
-            postMessage: function () {},
-            terminate: function () {},
-            addEventListener: function () {},
-            removeEventListener: function () {},
-          };
-        },
-      };
-    }
+    // CRITICAL: never point the worker at htmlWorker.js directly — those files need AMD `define`.
+    // Always bootstrap via workerMain.js inside a same-origin blob (Monaco FAQ / CDN pattern).
+    self.MonacoEnvironment = {
+      getWorkerUrl: function (_moduleId, _label) {
+        const js =
+          "self.MonacoEnvironment={baseUrl:" +
+          JSON.stringify(MONACO_MIN) +
+          "};" +
+          "importScripts(" +
+          JSON.stringify(MONACO_MIN + "vs/base/worker/workerMain.js") +
+          ");";
+        return URL.createObjectURL(new Blob([js], { type: "application/javascript" }));
+      },
+    };
 
     // Load AMD loader once
     await new Promise((resolve, reject) => {
@@ -102,9 +84,7 @@ export function initEditor() {
         return;
       }
       const s = document.createElement("script");
-      s.src = useProxy
-        ? origin + "/__monaco__/npm/monaco-editor@" + VER + "/min/vs/loader.js"
-        : "https://cdn.jsdelivr.net/npm/monaco-editor@" + VER + "/min/vs/loader.js";
+      s.src = MONACO_VS + "/loader.js";
       s.onload = () => resolve();
       s.onerror = () => reject(new Error("Failed to load Monaco loader from " + s.src));
       document.head.appendChild(s);
