@@ -85,6 +85,11 @@ const DEFAULTS = {
   transitionMs: 180,
   transitionEasing: "cubic-bezier(0.22, 1, 0.36, 1)",
   transitionTargets: "caret,selection,line-highlight", // comma list
+
+  // Pixel look
+  pixelatedCursor: false,
+  pixelatedCaret: false,
+  caretBlockPixelSize: 2,
 };
 
 let panel = null;
@@ -254,7 +259,7 @@ function framesToKeyframes(frames) {
       const color = f.color || "#00f3ff";
       const op = f.opacity != null ? f.opacity : 1;
       const sy = f.scaleY != null ? f.scaleY : 1;
-      return `${pct}% { caret-color: ${color}; opacity: ${op}; transform: scaleY(${sy}); }`;
+      return `${pct}% { caret-color: ${color}; background-color: ${color}; opacity: ${op}; transform: scaleY(${sy}); }`;
     })
     .join("\n");
 }
@@ -274,7 +279,7 @@ export function applyCursorCaretCss(settings) {
   const curU = resolveCursor(s.mouseCursorUi, s.mouseCursorCustomUrl);
 
   const glowM = s.caretGlow
-    ? `text-shadow: 0 0 ${s.caretGlowBlur || 8}px ${s.caretGlowColor || s.caretColorMonaco};`
+    ? `box-shadow: 0 0 ${s.caretGlowBlur || 8}px ${s.caretGlowColor || s.caretColorMonaco};`
     : "";
   const glowT = s.caretGlow
     ? `text-shadow: 0 0 ${s.caretGlowBlur || 8}px ${s.caretGlowColor || s.caretColorTerminal};`
@@ -349,11 +354,26 @@ textarea {
   caret-color: ${s.caretColorInputs} !important;
 }
 
-/* Monaco caret glow via cursor layer when possible */
+/* Monaco draws the caret as .cursor (not CSS caret-color on the hidden textarea) */
 .monaco-editor .cursor {
+  background-color: ${s.caretColorMonaco} !important;
+  border-color: ${s.caretColorMonaco} !important;
   ${glowM}
   ${animRule}
+  ${s.pixelatedCaret ? "image-rendering: pixelated; image-rendering: crisp-edges;" : ""}
 }
+.monaco-editor .cursor.secondary {
+  background-color: ${s.caretColorMonaco} !important;
+}
+/* Hidden textarea caret (fallback) */
+.monaco-editor .inputarea {
+  caret-color: ${s.caretColorMonaco} !important;
+}
+#monaco-container, #monaco-container * {
+  ${s.pixelatedCursor ? "cursor: " + curM + " !important;" : ""}
+}
+${s.pixelatedCursor ? "body { image-rendering: pixelated; }" : ""}
+
 
 @keyframes n3xn-caret-frames {
 ${kf}
@@ -510,6 +530,8 @@ function ensurePanel() {
         <input id="ms-caret-glow-color" type="color" style="${fs}" />
         <label style="color:#888">Glow blur (px)</label>
         <input id="ms-caret-glow-blur" type="number" min="0" max="32" style="${fs}" />
+        <label style="color:#888"><input type="checkbox" id="ms-pixel-caret" /> Pixelated caret (crisp block edges)</label>
+        <label style="color:#888"><input type="checkbox" id="ms-pixel-cursor" /> Pixelated mouse cursor rendering</label>
 
         <div style="color:#00f3ff;font-weight:600;margin:12px 0 6px">Multi-frame caret animation</div>
         <label style="color:#888"><input type="checkbox" id="ms-caret-anim" /> Enable frame animation</label>
@@ -601,6 +623,8 @@ async function fillForm() {
   setVal("ms-caret-glow", s.caretGlow);
   setVal("ms-caret-glow-color", s.caretGlowColor || "#00f3ff");
   setVal("ms-caret-glow-blur", s.caretGlowBlur ?? 8);
+  setVal("ms-pixel-caret", s.pixelatedCaret);
+  setVal("ms-pixel-cursor", s.pixelatedCursor);
   setVal("ms-caret-anim", s.caretAnimEnabled);
   setVal("ms-caret-anim-ms", s.caretAnimDurationMs || 600);
   setVal("ms-caret-frames", JSON.stringify(s.caretAnimFrames || DEFAULTS.caretAnimFrames, null, 2));
@@ -642,6 +666,8 @@ function readForm() {
     caretGlow: !!getVal("ms-caret-glow"),
     caretGlowColor: getVal("ms-caret-glow-color"),
     caretGlowBlur: +getVal("ms-caret-glow-blur") || 0,
+    pixelatedCaret: !!getVal("ms-pixel-caret"),
+    pixelatedCursor: !!getVal("ms-pixel-cursor"),
     caretAnimEnabled: !!getVal("ms-caret-anim"),
     caretAnimDurationMs: +getVal("ms-caret-anim-ms") || 600,
     caretAnimFrames: frames,
@@ -696,6 +722,8 @@ function fillFormFromObj(s) {
   setVal("ms-caret-glow", s.caretGlow);
   setVal("ms-caret-glow-color", s.caretGlowColor);
   setVal("ms-caret-glow-blur", s.caretGlowBlur);
+  setVal("ms-pixel-caret", s.pixelatedCaret);
+  setVal("ms-pixel-cursor", s.pixelatedCursor);
   setVal("ms-caret-anim", s.caretAnimEnabled);
   setVal("ms-caret-anim-ms", s.caretAnimDurationMs);
   setVal("ms-caret-frames", JSON.stringify(s.caretAnimFrames || [], null, 2));
