@@ -1,7 +1,17 @@
-# Cloudflare Pages — correct MIME for modules
 /js/*
   Content-Type: application/javascript; charset=utf-8
   X-Content-Type-Options: nosniff
 
 /*.js
   Content-Type: application/javascript; charset=utf-8
+
+/sw.js
+  Content-Type: application/javascript; charset=utf-8
+  Service-Worker-Allowed: /
+  Cache-Control: no-cache
+
+/manifest.webmanifest
+  Content-Type: application/manifest+json; charset=utf-8
+
+/__monaco__/*
+  Cache-Control: public, max-age=31536000
