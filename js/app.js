@@ -9,6 +9,7 @@ import * as ed from "./editor.js";
 import * as runner from "./runner.js";
 import * as media from "./media-editor.js";
 import * as htmlVisual from "./html-visual.js";
+import * as monacoSettings from "./monaco-settings.js";
 
 // ========== AUTH ==========
 
@@ -513,6 +514,18 @@ document.getElementById("btn-fs-app").onclick = () => {
 document.getElementById("btn-fs-editor").onclick = () => {
   toggleFs(document.getElementById("editor-area"));
 };
+
+const msBtn = document.getElementById("btn-monaco-settings");
+if (msBtn) {
+  msBtn.onclick = () => {
+    try {
+      monacoSettings.defineExtraThemes();
+      monacoSettings.openSettingsDrawer();
+    } catch (e) {
+      alert("Settings: " + e.message);
+    }
+  };
+}
 
 // Media / HTML visual editors — bind safely
 function bindToolButtons() {
