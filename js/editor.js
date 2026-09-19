@@ -48,6 +48,9 @@ export function initEditor() {
     require(["vs/editor/editor.main"], () => {
       monaco.editor.defineTheme("n3xn-dark", N3XN_THEME);
       monaco.editor.setTheme("n3xn-dark");
+      import("./monaco-settings.js")
+        .then((ms) => ms.defineExtraThemes())
+        .catch(() => {});
 
       editor = monaco.editor.create(document.getElementById("monaco-container"), {
         value: "",
@@ -274,6 +277,7 @@ function switchTo(path) {
     const map = {
       html: "html-window", htm: "html-window",
       js: "js", mjs: "js", cjs: "js",
+      py: "python",
       png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
       mp3: "blob-open", wav: "blob-open", ogg: "blob-open",
       mp4: "blob-open", webm: "blob-open", mov: "blob-open",
@@ -283,6 +287,12 @@ function switchTo(path) {
     };
     if (map[ext]) sel.value = map[ext];
     else sel.value = "auto";
+  }
+  // Per-file / global Monaco settings
+  if (!tab?.media && path) {
+    import("./monaco-settings.js")
+      .then((ms) => ms.applyForOpenFile(path))
+      .catch(() => {});
   }
 }
 
