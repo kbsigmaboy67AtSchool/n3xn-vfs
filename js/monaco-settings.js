@@ -90,6 +90,35 @@ const DEFAULTS = {
   pixelatedCursor: false,
   pixelatedCaret: false,
   caretBlockPixelSize: 2,
+
+  // Full UI / selection chrome (free-form CSS values)
+  uiSelection: "rgba(0, 243, 255, 0.35)",
+  uiSelectionColor: "#ffffff",
+  uiBg: "#0a0a0f",
+  uiBgPanel: "rgba(13, 17, 30, 0.92)",
+  uiBgInput: "#05070f",
+  uiBgButton: "linear-gradient(180deg, #1a1a28 0%, #0d0d14 100%)",
+  uiBgButtonHover: "linear-gradient(180deg, #2a2a40 0%, #1a1a28 100%)",
+  uiBgButtonActive: "linear-gradient(180deg, #0d0d14 0%, #1a1a28 100%)",
+  uiColor: "#e2e8f0",
+  uiColorMuted: "#94a3b8",
+  uiColorAccent: "#00f3ff",
+  uiBorderColor: "#1e293b",
+  uiBorderColorHover: "#00f3ff88",
+  uiBorderColorFocus: "#00f3ff",
+  uiBorderWidth: "1px",
+  uiBorderStyle: "solid",
+  uiBorderRadius: "6px",
+  uiBackgroundClip: "border-box",
+  uiBoxShadow: "0 0 0 1px rgba(255,255,255,0.04), 0 8px 24px rgba(0,0,0,0.45)",
+  uiBoxShadowHover: "0 0 12px rgba(0, 243, 255, 0.25), 0 8px 24px rgba(0,0,0,0.5)",
+  uiBoxShadowActive: "0 0 4px rgba(0, 243, 255, 0.4) inset",
+  uiTextShadow: "none",
+  uiTextShadowHover: "0 0 8px rgba(0, 243, 255, 0.5)",
+  uiMonacoSelection: "rgba(0, 243, 255, 0.28)",
+  uiMonacoSelectionHighlight: "rgba(192, 132, 252, 0.22)",
+  uiMonacoLineHighlight: "rgba(255, 255, 255, 0.04)",
+  uiCustomCss: "",
 };
 
 let panel = null;
@@ -383,6 +412,132 @@ ${exp}
 `;
 }
 
+
+const UI_STYLE_ID = "n3xn-ui-chrome-css";
+
+export function applyUiChromeCss(settings) {
+  const s = { ...DEFAULTS, ...settings };
+  let el = document.getElementById(UI_STYLE_ID);
+  if (!el) {
+    el = document.createElement("style");
+    el.id = UI_STYLE_ID;
+    document.head.appendChild(el);
+  }
+
+  const br = `${s.uiBorderWidth || "1px"} ${s.uiBorderStyle || "solid"} ${s.uiBorderColor || "#1e293b"}`;
+  const radius = s.uiBorderRadius || "6px";
+  const clip = s.uiBackgroundClip || "border-box";
+
+  el.textContent = `
+/* n3xn UI chrome — selection, backgrounds, borders, shadows, hover/active */
+::selection {
+  background: ${s.uiSelection} !important;
+  color: ${s.uiSelectionColor} !important;
+}
+::-moz-selection {
+  background: ${s.uiSelection} !important;
+  color: ${s.uiSelectionColor} !important;
+}
+
+/* Monaco selection / line highlight */
+.monaco-editor .selected-text,
+.monaco-editor .cslr.selected-text,
+.monaco-editor .monaco-selection {
+  background-color: ${s.uiMonacoSelection} !important;
+}
+.monaco-editor .wordHighlight,
+.monaco-editor .wordHighlightStrong,
+.monaco-editor .selectionHighlight {
+  background-color: ${s.uiMonacoSelectionHighlight} !important;
+}
+.monaco-editor .view-overlays .current-line,
+.monaco-editor .view-overlays .current-line-exact {
+  background-color: ${s.uiMonacoLineHighlight} !important;
+}
+
+html, body {
+  background: ${s.uiBg} !important;
+  color: ${s.uiColor} !important;
+}
+
+.topbar, .panel, .side-panel, #explorer-panel, #editor-panel, #terminal-panel,
+#github-panel, #monaco-settings-drawer > div,
+.glass-panel, .modal, .drawer {
+  background: ${s.uiBgPanel} !important;
+  border: ${br} !important;
+  border-radius: ${radius} !important;
+  box-shadow: ${s.uiBoxShadow} !important;
+  color: ${s.uiColor} !important;
+  background-clip: ${clip} !important;
+}
+
+input:not([type="color"]):not([type="range"]):not([type="checkbox"]):not([type="file"]),
+textarea, select, #terminal-input {
+  background: ${s.uiBgInput} !important;
+  color: ${s.uiColor} !important;
+  border: ${br} !important;
+  border-radius: ${radius} !important;
+  box-shadow: none !important;
+  background-clip: ${clip} !important;
+  text-shadow: ${s.uiTextShadow || "none"} !important;
+}
+input:hover, textarea:hover, select:hover, #terminal-input:hover {
+  border-color: ${s.uiBorderColorHover} !important;
+  box-shadow: ${s.uiBoxShadowHover} !important;
+  text-shadow: ${s.uiTextShadowHover || "none"} !important;
+}
+input:focus, textarea:focus, select:focus, #terminal-input:focus {
+  border-color: ${s.uiBorderColorFocus} !important;
+  outline: none !important;
+  box-shadow: ${s.uiBoxShadowHover} !important;
+}
+
+.btn, button.btn, .icon-btn, button:not(.monaco-editor button) {
+  background: ${s.uiBgButton} !important;
+  color: ${s.uiColor} !important;
+  border: ${br} !important;
+  border-radius: ${radius} !important;
+  box-shadow: ${s.uiBoxShadow} !important;
+  text-shadow: ${s.uiTextShadow || "none"} !important;
+  background-clip: ${clip} !important;
+  transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, text-shadow 0.15s ease;
+}
+.btn:hover, button.btn:hover, .icon-btn:hover, button:not(.monaco-editor button):hover {
+  background: ${s.uiBgButtonHover} !important;
+  border-color: ${s.uiBorderColorHover} !important;
+  box-shadow: ${s.uiBoxShadowHover} !important;
+  text-shadow: ${s.uiTextShadowHover || "none"} !important;
+  color: ${s.uiColorAccent} !important;
+}
+.btn:active, button.btn:active, .icon-btn:active, button:not(.monaco-editor button):active {
+  background: ${s.uiBgButtonActive} !important;
+  box-shadow: ${s.uiBoxShadowActive} !important;
+  transform: translateY(1px);
+}
+.btn.primary {
+  border-color: ${s.uiColorAccent} !important;
+  color: ${s.uiColorAccent} !important;
+}
+
+.file-tree .node:hover, .file-tree .file:hover, #file-tree [data-path]:hover {
+  background: ${s.uiMonacoLineHighlight} !important;
+  border-radius: ${radius} !important;
+  box-shadow: ${s.uiBoxShadowHover} !important;
+}
+.file-tree .node.active, .file-tree .file.active {
+  border-color: ${s.uiBorderColorFocus} !important;
+  box-shadow: ${s.uiBoxShadowActive} !important;
+}
+
+a { color: ${s.uiColorAccent}; }
+.muted, .status-bar { color: ${s.uiColorMuted} !important; }
+
+/* User free-form CSS (last — highest priority among our injects) */
+${s.uiCustomCss || ""}
+`;
+}
+
+
 export function applySettings(settings) {
   const s = { ...DEFAULTS, ...settings };
   lastApplied = s;
@@ -416,6 +571,7 @@ export function applySettings(settings) {
   }
 
   applyCursorCaretCss(s);
+  applyUiChromeCss(s);
 }
 
 export async function saveSettings(settings, { path = null, asGlobal = true } = {}) {
@@ -560,6 +716,75 @@ function ensurePanel() {
         <label style="color:#888">Targets (caret,selection,line-highlight)</label>
         <input id="ms-trans-targets" type="text" style="${fs}" />
 
+
+        <div style="color:#c084fc;font-weight:600;margin:12px 0 6px">Selection &amp; Monaco highlights</div>
+        <label style="color:#888">Page ::selection background</label>
+        <input id="ms-ui-sel" type="text" placeholder="rgba(...) or #hex" style="${fs}" />
+        <label style="color:#888">::selection text color</label>
+        <input id="ms-ui-sel-color" type="text" style="${fs}" />
+        <label style="color:#888">Monaco selection</label>
+        <input id="ms-ui-monaco-sel" type="text" style="${fs}" />
+        <label style="color:#888">Monaco selection highlight</label>
+        <input id="ms-ui-monaco-hl" type="text" style="${fs}" />
+        <label style="color:#888">Monaco line highlight</label>
+        <input id="ms-ui-monaco-line" type="text" style="${fs}" />
+
+        <div style="color:#c084fc;font-weight:600;margin:12px 0 6px">Backgrounds (any CSS: color, gradient, image…)</div>
+        <label style="color:#888">Page / body</label>
+        <input id="ms-ui-bg" type="text" style="${fs}" />
+        <label style="color:#888">Panels</label>
+        <input id="ms-ui-bg-panel" type="text" style="${fs}" />
+        <label style="color:#888">Inputs</label>
+        <input id="ms-ui-bg-input" type="text" style="${fs}" />
+        <label style="color:#888">Buttons</label>
+        <input id="ms-ui-bg-btn" type="text" style="${fs}" />
+        <label style="color:#888">Buttons :hover</label>
+        <input id="ms-ui-bg-btn-hover" type="text" style="${fs}" />
+        <label style="color:#888">Buttons :active / click</label>
+        <input id="ms-ui-bg-btn-active" type="text" style="${fs}" />
+        <label style="color:#888">background-clip</label>
+        <select id="ms-ui-clip" style="${fs}">
+          <option value="border-box">border-box</option>
+          <option value="padding-box">padding-box</option>
+          <option value="content-box">content-box</option>
+          <option value="text">text</option>
+        </select>
+
+        <div style="color:#c084fc;font-weight:600;margin:12px 0 6px">Color / border</div>
+        <label style="color:#888">Text color</label>
+        <input id="ms-ui-color" type="text" style="${fs}" />
+        <label style="color:#888">Muted color</label>
+        <input id="ms-ui-color-muted" type="text" style="${fs}" />
+        <label style="color:#888">Accent color</label>
+        <input id="ms-ui-color-accent" type="text" style="${fs}" />
+        <label style="color:#888">Border color</label>
+        <input id="ms-ui-border" type="text" style="${fs}" />
+        <label style="color:#888">Border :hover</label>
+        <input id="ms-ui-border-hover" type="text" style="${fs}" />
+        <label style="color:#888">Border :focus</label>
+        <input id="ms-ui-border-focus" type="text" style="${fs}" />
+        <label style="color:#888">Border width</label>
+        <input id="ms-ui-border-w" type="text" style="${fs}" />
+        <label style="color:#888">Border style</label>
+        <input id="ms-ui-border-style" type="text" placeholder="solid dashed etc" style="${fs}" />
+        <label style="color:#888">Border radius</label>
+        <input id="ms-ui-radius" type="text" style="${fs}" />
+
+        <div style="color:#c084fc;font-weight:600;margin:12px 0 6px">Shadows / glows (multi-layer CSS ok)</div>
+        <label style="color:#888">box-shadow</label>
+        <input id="ms-ui-shadow" type="text" style="${fs}" />
+        <label style="color:#888">box-shadow :hover</label>
+        <input id="ms-ui-shadow-hover" type="text" style="${fs}" />
+        <label style="color:#888">box-shadow :active</label>
+        <input id="ms-ui-shadow-active" type="text" style="${fs}" />
+        <label style="color:#888">text-shadow</label>
+        <input id="ms-ui-tshadow" type="text" style="${fs}" />
+        <label style="color:#888">text-shadow :hover</label>
+        <input id="ms-ui-tshadow-hover" type="text" style="${fs}" />
+
+        <div style="color:#c084fc;font-weight:600;margin:12px 0 6px">Custom CSS (anything)</div>
+        <textarea id="ms-ui-custom" rows="6" placeholder=".btn.primary { ... }" style="${fs};font-family:monospace;font-size:11px"></textarea>
+
         <div style="color:#00f3ff;font-weight:600;margin:12px 0 6px">Presets</div>
         <select id="ms-preset" style="${fs}"></select>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
@@ -625,6 +850,35 @@ async function fillForm() {
   setVal("ms-caret-glow-blur", s.caretGlowBlur ?? 8);
   setVal("ms-pixel-caret", s.pixelatedCaret);
   setVal("ms-pixel-cursor", s.pixelatedCursor);
+
+  setVal("ms-ui-sel", s.uiSelection);
+  setVal("ms-ui-sel-color", s.uiSelectionColor);
+  setVal("ms-ui-monaco-sel", s.uiMonacoSelection);
+  setVal("ms-ui-monaco-hl", s.uiMonacoSelectionHighlight);
+  setVal("ms-ui-monaco-line", s.uiMonacoLineHighlight);
+  setVal("ms-ui-bg", s.uiBg);
+  setVal("ms-ui-bg-panel", s.uiBgPanel);
+  setVal("ms-ui-bg-input", s.uiBgInput);
+  setVal("ms-ui-bg-btn", s.uiBgButton);
+  setVal("ms-ui-bg-btn-hover", s.uiBgButtonHover);
+  setVal("ms-ui-bg-btn-active", s.uiBgButtonActive);
+  setVal("ms-ui-clip", s.uiBackgroundClip || "border-box");
+  setVal("ms-ui-color", s.uiColor);
+  setVal("ms-ui-color-muted", s.uiColorMuted);
+  setVal("ms-ui-color-accent", s.uiColorAccent);
+  setVal("ms-ui-border", s.uiBorderColor);
+  setVal("ms-ui-border-hover", s.uiBorderColorHover);
+  setVal("ms-ui-border-focus", s.uiBorderColorFocus);
+  setVal("ms-ui-border-w", s.uiBorderWidth);
+  setVal("ms-ui-border-style", s.uiBorderStyle);
+  setVal("ms-ui-radius", s.uiBorderRadius);
+  setVal("ms-ui-shadow", s.uiBoxShadow);
+  setVal("ms-ui-shadow-hover", s.uiBoxShadowHover);
+  setVal("ms-ui-shadow-active", s.uiBoxShadowActive);
+  setVal("ms-ui-tshadow", s.uiTextShadow);
+  setVal("ms-ui-tshadow-hover", s.uiTextShadowHover);
+  setVal("ms-ui-custom", s.uiCustomCss || "");
+
   setVal("ms-caret-anim", s.caretAnimEnabled);
   setVal("ms-caret-anim-ms", s.caretAnimDurationMs || 600);
   setVal("ms-caret-frames", JSON.stringify(s.caretAnimFrames || DEFAULTS.caretAnimFrames, null, 2));
@@ -668,6 +922,35 @@ function readForm() {
     caretGlowBlur: +getVal("ms-caret-glow-blur") || 0,
     pixelatedCaret: !!getVal("ms-pixel-caret"),
     pixelatedCursor: !!getVal("ms-pixel-cursor"),
+
+    uiSelection: getVal("ms-ui-sel"),
+    uiSelectionColor: getVal("ms-ui-sel-color"),
+    uiMonacoSelection: getVal("ms-ui-monaco-sel"),
+    uiMonacoSelectionHighlight: getVal("ms-ui-monaco-hl"),
+    uiMonacoLineHighlight: getVal("ms-ui-monaco-line"),
+    uiBg: getVal("ms-ui-bg"),
+    uiBgPanel: getVal("ms-ui-bg-panel"),
+    uiBgInput: getVal("ms-ui-bg-input"),
+    uiBgButton: getVal("ms-ui-bg-btn"),
+    uiBgButtonHover: getVal("ms-ui-bg-btn-hover"),
+    uiBgButtonActive: getVal("ms-ui-bg-btn-active"),
+    uiBackgroundClip: getVal("ms-ui-clip"),
+    uiColor: getVal("ms-ui-color"),
+    uiColorMuted: getVal("ms-ui-color-muted"),
+    uiColorAccent: getVal("ms-ui-color-accent"),
+    uiBorderColor: getVal("ms-ui-border"),
+    uiBorderColorHover: getVal("ms-ui-border-hover"),
+    uiBorderColorFocus: getVal("ms-ui-border-focus"),
+    uiBorderWidth: getVal("ms-ui-border-w"),
+    uiBorderStyle: getVal("ms-ui-border-style"),
+    uiBorderRadius: getVal("ms-ui-radius"),
+    uiBoxShadow: getVal("ms-ui-shadow"),
+    uiBoxShadowHover: getVal("ms-ui-shadow-hover"),
+    uiBoxShadowActive: getVal("ms-ui-shadow-active"),
+    uiTextShadow: getVal("ms-ui-tshadow"),
+    uiTextShadowHover: getVal("ms-ui-tshadow-hover"),
+    uiCustomCss: getVal("ms-ui-custom") || "",
+
     caretAnimEnabled: !!getVal("ms-caret-anim"),
     caretAnimDurationMs: +getVal("ms-caret-anim-ms") || 600,
     caretAnimFrames: frames,
