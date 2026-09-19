@@ -42,11 +42,8 @@ const N3XN_THEME = {
 
 export function initEditor() {
   return new Promise((resolve) => {
-    // Same-origin Monaco via SW proxy — CDN filled on first online use, then offline
-    const MONACO_CONTROLLED = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
-    const MONACO_VS = MONACO_CONTROLLED
-      ? "__monaco__/npm/monaco-editor@0.52.0/min/vs"
-      : "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs";
+    // Always absolute CDN URLs (avoids Invalid URL from relative /__monaco__/ proxy)
+    const MONACO_VS = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs";
     self.MonacoEnvironment = {
       getWorkerUrl: function (_moduleId, label) {
         const map = {
@@ -61,13 +58,15 @@ export function initEditor() {
           javascript: "language/typescript/tsWorker.js",
         };
         const rel = map[label] || "base/worker/workerMain.js";
-        // Blob worker importScripts same-origin proxy URL so SW can serve offline
-        const workerPath = `${MONACO_VS}/${rel}`;
-        const blob = new Blob(
-          [`self.MonacoEnvironment={baseUrl:new URL('${MONACO_VS}/../', self.location.href).href}; importScripts(new URL('${workerPath}', self.location.href).href);`],
-          { type: "application/javascript" }
-        );
-        return URL.createObjectURL(blob);
+        const workerFull = MONACO_VS + "/" + rel;
+        // Cross-origin workers must be loaded via blob + importScripts with absolute URL
+        const code =
+          "self.MonacoEnvironment={baseUrl:" +
+          JSON.stringify(MONACO_VS + "/") +
+          "};importScripts(" +
+          JSON.stringify(workerFull) +
+          ");";
+        return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
       },
     };
     require.config({
