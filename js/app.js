@@ -516,6 +516,13 @@ window.__n3xnHidePreview = () => {
   if (closeBtn) closeBtn.classList.add("hidden");
 };
 
+document.getElementById("btn-save").onclick = async () => {
+  try {
+    await ed.saveActive();
+  } catch (e) {
+    alert("Save failed: " + e.message);
+  }
+};
 document.getElementById("btn-run").onclick = () => runActiveFile();
 document.getElementById("btn-preview-close-bar").onclick = () => {
   window.__n3xnHidePreview();
