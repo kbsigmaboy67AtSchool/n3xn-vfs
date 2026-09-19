@@ -1,0 +1,3 @@
+# Static assets must not fall through to index.html
+/sw.js  /sw.js  200
+/manifest.webmanifest  /manifest.webmanifest  200
