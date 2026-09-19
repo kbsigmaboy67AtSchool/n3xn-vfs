@@ -42,53 +42,100 @@ const N3XN_THEME = {
 };
 
 export function initEditor() {
-  // Idempotent — prevents AMD "Duplicate definition of module 'vs/editor/editor.main'"
   if (editor && monacoReady) return Promise.resolve(editor);
   if (monacoLoading) return monacoLoading;
 
-  monacoLoading = new Promise((resolve, reject) => {
-    const MONACO_VS = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs";
+  monacoLoading = (async () => {
+    const VER = "0.52.0";
+    // Prefer same-origin SW proxy so workers are not cross-origin
+    let useProxy = false;
+    try {
+      if (window.__n3xnSwReady) await window.__n3xnSwReady;
+      // Only proxy when SW actually controls this page (otherwise /__monaco__/ is 404 HTML)
+      useProxy = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+    } catch (_) {
+      useProxy = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+    }
 
-    self.MonacoEnvironment = {
-      getWorkerUrl: function (_moduleId, label) {
-        const map = {
-          json: "language/json/jsonWorker.js",
-          css: "language/css/cssWorker.js",
-          scss: "language/css/cssWorker.js",
-          less: "language/css/cssWorker.js",
-          html: "language/html/htmlWorker.js",
-          handlebars: "language/html/htmlWorker.js",
-          razor: "language/html/htmlWorker.js",
-          typescript: "language/typescript/tsWorker.js",
-          javascript: "language/typescript/tsWorker.js",
-        };
-        const rel = map[label] || "base/worker/workerMain.js";
-        const workerFull = MONACO_VS + "/" + rel;
-        const code =
-          "self.MonacoEnvironment={baseUrl:" +
-          JSON.stringify(MONACO_VS + "/") +
-          "};importScripts(" +
-          JSON.stringify(workerFull) +
-          ");";
-        return URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
-      },
-    };
+    const origin = location.origin;
+    const MONACO_VS = useProxy
+      ? origin + "/__monaco__/npm/monaco-editor@" + VER + "/min/vs"
+      : "https://cdn.jsdelivr.net/npm/monaco-editor@" + VER + "/min/vs";
 
-    const create = () => {
-      try {
-        monaco.editor.defineTheme("n3xn-dark", N3XN_THEME);
-        monaco.editor.setTheme("n3xn-dark");
-      } catch (_) {}
-      import("./monaco-settings.js")
-        .then((ms) => ms.defineExtraThemes())
-        .catch(() => {});
+    // Workers only when SW proxy is active (same-origin). CDN importScripts often fails (CORS/filter).
+    if (useProxy) {
+      self.MonacoEnvironment = {
+        getWorkerUrl: function (_id, label) {
+          const map = {
+            json: "language/json/jsonWorker.js",
+            css: "language/css/cssWorker.js",
+            scss: "language/css/cssWorker.js",
+            less: "language/css/cssWorker.js",
+            html: "language/html/htmlWorker.js",
+            handlebars: "language/html/htmlWorker.js",
+            razor: "language/html/htmlWorker.js",
+            typescript: "language/typescript/tsWorker.js",
+            javascript: "language/typescript/tsWorker.js",
+          };
+          const rel = map[label] || "base/worker/workerMain.js";
+          return MONACO_VS + "/" + rel;
+        },
+      };
+    } else {
+      // Main-thread mode until SW controls the page (after one reload)
+      self.MonacoEnvironment = {
+        getWorker: function () {
+          return {
+            postMessage: function () {},
+            terminate: function () {},
+            addEventListener: function () {},
+            removeEventListener: function () {},
+          };
+        },
+      };
+    }
 
-      if (editor) {
-        monacoReady = true;
-        resolve(editor);
+    // Load AMD loader once
+    await new Promise((resolve, reject) => {
+      if (typeof window.require === "function" && window.require.config) {
+        resolve();
         return;
       }
+      const s = document.createElement("script");
+      s.src = useProxy
+        ? origin + "/__monaco__/npm/monaco-editor@" + VER + "/min/vs/loader.js"
+        : "https://cdn.jsdelivr.net/npm/monaco-editor@" + VER + "/min/vs/loader.js";
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("Failed to load Monaco loader from " + s.src));
+      document.head.appendChild(s);
+    });
 
+    if (typeof window.monaco !== "undefined" && window.monaco.editor) {
+      // already fully loaded
+    } else {
+      await new Promise((resolve, reject) => {
+        try {
+          window.require.config({ paths: { vs: MONACO_VS } });
+          window.require(
+            ["vs/editor/editor.main"],
+            () => resolve(),
+            (err) => reject(err || new Error("editor.main failed"))
+          );
+        } catch (e) {
+          reject(e);
+        }
+      });
+    }
+
+    try {
+      monaco.editor.defineTheme("n3xn-dark", N3XN_THEME);
+      monaco.editor.setTheme("n3xn-dark");
+    } catch (_) {}
+    import("./monaco-settings.js")
+      .then((ms) => ms.defineExtraThemes())
+      .catch(() => {});
+
+    if (!editor) {
       editor = monaco.editor.create(document.getElementById("monaco-container"), {
         value: "",
         language: "plaintext",
@@ -112,39 +159,21 @@ export function initEditor() {
         if (tab) tab.dirty = true;
         updateTabUI();
       });
-
-      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-        saveActive();
-      });
-
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveActive());
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
         if (window.__n3xnRunActive) window.__n3xnRunActive();
       });
-
       window.__n3xnEditor = editor;
-      monacoReady = true;
-      resolve(editor);
-    };
-
-    // Already loaded (e.g. second bootApp without full reload)
-    if (typeof window.monaco !== "undefined" && window.monaco.editor) {
-      create();
-      return;
     }
 
-    if (typeof require === "undefined") {
-      monacoLoading = null;
-      reject(new Error("Monaco loader (require) not found — check loader.js script tag"));
-      return;
-    }
-
-    require.config({
-      paths: { vs: MONACO_VS },
-    });
-    require(["vs/editor/editor.main"], create, (err) => {
-      monacoLoading = null;
-      reject(err || new Error("Monaco failed to load"));
-    });
+    monacoReady = true;
+    try {
+      navigator.serviceWorker?.controller?.postMessage({ type: "WARM_MONACO" });
+    } catch (_) {}
+    return editor;
+  })().catch((e) => {
+    monacoLoading = null;
+    throw e;
   });
 
   return monacoLoading;
