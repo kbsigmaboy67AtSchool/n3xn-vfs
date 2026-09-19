@@ -18,11 +18,29 @@
   <link rel="stylesheet" href="css/theme.css" />
   <link rel="stylesheet" href="css/app.css" />
   <script>
-    if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(function () {});
-    }
+    // SW must control the page before Monaco uses /__monaco__/ (same-origin workers)
+    window.__n3xnSwReady = (async function () {
+      if (!("serviceWorker" in navigator)) return false;
+      try {
+        const reg = await navigator.serviceWorker.register("./sw.js", { scope: "./" });
+        await navigator.serviceWorker.ready;
+        if (navigator.serviceWorker.controller) return true;
+        // First visit: SW installed but not controlling yet → one soft reload
+        if (!sessionStorage.getItem("n3xn_sw_reload")) {
+          sessionStorage.setItem("n3xn_sw_reload", "1");
+          // Give activate/claim a moment
+          await new Promise((r) => setTimeout(r, 300));
+          if (navigator.serviceWorker.controller) return true;
+          location.reload();
+          return false;
+        }
+        return !!(navigator.serviceWorker.controller || reg.active);
+      } catch (e) {
+        console.warn("[n3xn] SW register failed", e);
+        return false;
+      }
+    })();
   </script>
-  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 </head>
 <body>
