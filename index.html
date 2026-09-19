@@ -4,13 +4,36 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>n3xn Virtual FileSystem v2</title>
+  <meta name="theme-color" content="#0a0a0f" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="n3xn VFS" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" type="image/png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Sixtyfour&family=JetBrains+Mono:wght@400;500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/theme.css" />
   <link rel="stylesheet" href="css/app.css" />
+  <script>
+    // Register SW ASAP so the next load (and offline) can use the Monaco proxy cache
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(function () {});
+    }
+    (function () {
+      var controlled = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+      var src = controlled
+        ? "__monaco__/npm/monaco-editor@0.52.0/min/vs/loader.js"
+        : "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js";
+      var s = document.createElement("script");
+      s.src = src;
+      s.async = false;
+      document.head.appendChild(s);
+    })();
+  </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
 </head>
 <body>
   <!-- LOGIN / ACCOUNT SCREEN -->
@@ -18,6 +41,7 @@
     <div class="auth-container glow-box">
       <h1 class="logo">n3xn <span>VFS</span> v2</h1>
       <p class="subtitle">Encrypted Virtual Filesystem — Local Only</p>
+      <button type="button" id="btn-install-pwa" class="btn ghost small hidden" style="margin:8px auto;display:none">Install / Add to ChromeOS</button>
 
       <div id="login-view">
         <div class="form-group">
@@ -63,6 +87,7 @@
       </div>
       <div class="user-area">
         <span id="current-user"></span>
+        <button id="btn-github" class="btn small ghost" title="GitHub VFS">GitHub</button>
         <button id="btn-media" class="btn small ghost" title="Media / Meme editor">Media</button>
         <button id="btn-html-visual" class="btn small ghost" title="Visual HTML editor">HTML+</button>
         <button id="btn-fs-app" class="btn small ghost" title="Fullscreen app">⛶</button>
@@ -94,6 +119,7 @@
           <div class="editor-toolbar">
             <div class="tabs" id="editor-tabs"></div>
             <div class="run-bar" id="run-bar">
+              <button id="btn-save" class="btn small" title="Save file (Ctrl+S)">💾 Save</button>
               <button id="btn-run" class="btn small primary" title="Run / Preview (Ctrl+Enter)">▶ Run</button>
               <select id="run-mode" title="Run mode">
                 <option value="auto">Auto</option>
