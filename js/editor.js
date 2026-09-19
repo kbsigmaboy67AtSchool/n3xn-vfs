@@ -42,8 +42,36 @@ const N3XN_THEME = {
 
 export function initEditor() {
   return new Promise((resolve) => {
+    // Same-origin Monaco via SW proxy — CDN filled on first online use, then offline
+    const MONACO_CONTROLLED = !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+    const MONACO_VS = MONACO_CONTROLLED
+      ? "__monaco__/npm/monaco-editor@0.52.0/min/vs"
+      : "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs";
+    self.MonacoEnvironment = {
+      getWorkerUrl: function (_moduleId, label) {
+        const map = {
+          json: "language/json/jsonWorker.js",
+          css: "language/css/cssWorker.js",
+          scss: "language/css/cssWorker.js",
+          less: "language/css/cssWorker.js",
+          html: "language/html/htmlWorker.js",
+          handlebars: "language/html/htmlWorker.js",
+          razor: "language/html/htmlWorker.js",
+          typescript: "language/typescript/tsWorker.js",
+          javascript: "language/typescript/tsWorker.js",
+        };
+        const rel = map[label] || "base/worker/workerMain.js";
+        // Blob worker importScripts same-origin proxy URL so SW can serve offline
+        const workerPath = `${MONACO_VS}/${rel}`;
+        const blob = new Blob(
+          [`self.MonacoEnvironment={baseUrl:new URL('${MONACO_VS}/../', self.location.href).href}; importScripts(new URL('${workerPath}', self.location.href).href);`],
+          { type: "application/javascript" }
+        );
+        return URL.createObjectURL(blob);
+      },
+    };
     require.config({
-      paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" },
+      paths: { vs: MONACO_VS },
     });
     require(["vs/editor/editor.main"], () => {
       monaco.editor.defineTheme("n3xn-dark", N3XN_THEME);
@@ -90,6 +118,11 @@ export function initEditor() {
 
       window.__n3xnEditor = editor;
       monacoReady = true;
+      try {
+        if (navigator.serviceWorker?.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: "WARM_MONACO" });
+        }
+      } catch (_) {}
       resolve(editor);
     });
   });
@@ -278,6 +311,7 @@ function switchTo(path) {
       html: "html-window", htm: "html-window",
       js: "js", mjs: "js", cjs: "js",
       py: "python",
+      "n3-site": "n3-site",
       png: "image", jpg: "image", jpeg: "image", gif: "image", webp: "image", svg: "image",
       mp3: "blob-open", wav: "blob-open", ogg: "blob-open",
       mp4: "blob-open", webm: "blob-open", mov: "blob-open",
@@ -372,6 +406,7 @@ function detectLanguage(path) {
     less: "less",
     md: "markdown",
     py: "python",
+    "n3-site": "html",
     sh: "shell",
     bash: "shell",
     zsh: "shell",
