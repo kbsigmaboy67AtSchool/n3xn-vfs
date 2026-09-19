@@ -20,6 +20,12 @@ async function loadCollab() {
 async function loadPython() {
   return import("./python.js");
 }
+async function loadGithub() {
+  return import("./github.js");
+}
+async function loadStorage() {
+  return import("./storage-backends.js");
+}
 
 export function initTerminal() {
   const input = inputEl();
@@ -224,6 +230,10 @@ async function run(line) {
       case "logs":
       case "console":
         await cmdLogs(args);
+        break;
+      case "gh":
+      case "github":
+        await cmdGithub(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -804,6 +814,7 @@ function showHelp() {
     "  webfile get|sync|headers|put   — fetch/sync URLs into VFS",
     "  wss connect|chat|share|pull|collab|status|disconnect",
     "  python <file.py> | python -c <code> | python canvas",
+    "  gh help|auth|repos|use|pull-tree|commit|pr|issues|storage …",
     "  logs on|off|copy|clear  — mirror browser console to terminal",
     "  cmd list|add|rm   — manage custom commands",
     "",
@@ -842,3 +853,196 @@ export function clearTerminal() {
 }
 
 export { print, cwd };
+
+
+async function cmdGithub(args) {
+  const gh = await loadGithub();
+  const storage = await loadStorage();
+  gh.setLogger((msg, cls) => print(msg, cls || "out"));
+  const sub = (args[0] || "help").toLowerCase();
+
+  if (sub === "help" || sub === "-h") {
+    print(gh.tokenHelp());
+    return;
+  }
+  if (sub === "auth" || sub === "login" || sub === "token") {
+    let tok = args[1];
+    if (!tok) tok = prompt("GitHub classic PAT (ghp_…):");
+    if (!tok) throw new Error("Token required");
+    await gh.setToken(tok);
+    print("Token saved encrypted with your n3xn password", "ok");
+    return;
+  }
+  if (sub === "whoami" || sub === "me") {
+    const u = gh.getUser() || (await gh.loadSavedToken());
+    print(u ? JSON.stringify({ login: u.login, name: u.name, html_url: u.html_url }, null, 2) : "Not authed");
+    return;
+  }
+  if (sub === "logout" || sub === "clear") {
+    await gh.clearToken();
+    return;
+  }
+  if (sub === "rate") {
+    const r = await gh.rateLimit();
+    print(JSON.stringify(r.rate || r, null, 2));
+    return;
+  }
+  if (sub === "storage") {
+    if (!args[1]) {
+      print("Active: " + storage.getBackendId());
+      print(storage.listBackends().map((b) => b.id + " — " + b.label).join("\n"));
+      return;
+    }
+    storage.setBackend(args[1]);
+    print("Storage backend: " + storage.getBackendId(), "ok");
+    return;
+  }
+  if (sub === "repos") {
+    const repos = await gh.listRepos();
+    repos.slice(0, 40).forEach((r) => print(`${r.private ? "🔒" : "🌎"} ${r.full_name}  (${r.default_branch})`));
+    print(`(${repos.length} total)`, "ok");
+    return;
+  }
+  if (sub === "use") {
+    const spec = args[1];
+    if (!spec || !spec.includes("/")) throw new Error("Usage: gh use owner/repo [branch]");
+    const [owner, repo] = spec.split("/");
+    await gh.setRepo(owner, repo, args[2]);
+    return;
+  }
+  if (sub === "create-repo") {
+    const name = args[1];
+    if (!name) throw new Error("Usage: gh create-repo <name> [--private]");
+    const priv = args.includes("--private");
+    const r = await gh.createRepo(name, { private: priv });
+    print(`Created ${r.full_name}`, "ok");
+    await gh.setRepo(r.owner.login, r.name);
+    return;
+  }
+  if (sub === "branches") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const b = await gh.listBranches(cr.owner, cr.repo);
+    b.forEach((x) => print(x.name + (x.name === cr.branch ? " *" : "")));
+    return;
+  }
+  if (sub === "pull") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const path = args[1];
+    if (path) {
+      const local = await gh.pullFile(cr.owner, cr.repo, path, cr.branch);
+      print("Saved " + local, "ok");
+    } else {
+      print("Use gh pull-tree for full tree, or gh pull path/to/file");
+    }
+    if (window.refreshTree) window.refreshTree();
+    return;
+  }
+  if (sub === "pull-tree" || sub === "clone") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    await gh.pullTree(cr.owner, cr.repo, cr.branch, { maxFiles: parseInt(args[1], 10) || 500 });
+    if (window.refreshTree) window.refreshTree();
+    return;
+  }
+  if (sub === "commit") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const path = args[1];
+    if (!path) throw new Error("Usage: gh commit <path> [message words…]");
+    const msg = args.slice(2).join(" ") || undefined;
+    const f = await gh.readLocalGh(cr.owner, cr.repo, path);
+    if (!f) throw new Error("Local file missing — pull or write first: " + path);
+    await gh.commitFile(cr.owner, cr.repo, path, f.content, msg, cr.branch);
+    return;
+  }
+  if (sub === "push-paths" || sub === "commit-many") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const mi = args.indexOf("-m");
+    let message = "n3xn multi-file commit";
+    let paths = args.slice(1);
+    if (mi >= 0) {
+      message = args.slice(mi + 1).join(" ");
+      paths = args.slice(1, mi);
+    }
+    if (!paths.length) throw new Error("Usage: gh push-paths file1 file2 -m msg");
+    await gh.pushLocalChanges(cr.owner, cr.repo, paths, message, cr.branch);
+    return;
+  }
+  if (sub === "branch") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    if (!args[1]) throw new Error("Usage: gh branch <name>");
+    await gh.createBranch(cr.owner, cr.repo, args[1], cr.branch);
+    print("Branch created " + args[1], "ok");
+    return;
+  }
+  if (sub === "prs") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const prs = await gh.listPulls(cr.owner, cr.repo);
+    prs.forEach((p) => print(`#${p.number} ${p.title} (${p.head.ref}→${p.base.ref})`));
+    return;
+  }
+  if (sub === "pr") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const title = args[1], head = args[2], base = args[3] || cr.branch;
+    if (!title || !head) throw new Error("Usage: gh pr <title> <head-branch> [base]");
+    const pr = await gh.createPull(cr.owner, cr.repo, title, head, base);
+    print(`PR #${pr.number} ${pr.html_url}`, "ok");
+    return;
+  }
+  if (sub === "issues") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const issues = await gh.listIssues(cr.owner, cr.repo);
+    issues.forEach((i) => print(`#${i.number} ${i.title}`));
+    return;
+  }
+  if (sub === "issue") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const title = args.slice(1).join(" ");
+    if (!title) throw new Error("Usage: gh issue <title>");
+    const i = await gh.createIssue(cr.owner, cr.repo, title);
+    print(`Issue #${i.number}`, "ok");
+    return;
+  }
+  if (sub === "gist") {
+    const path = args[1] || window.__n3xnActivePath;
+    if (!path) throw new Error("Usage: gh gist <local-path>");
+    const f = await fs.readFile(path);
+    if (!f) throw new Error("File not found");
+    const name = path.split("/").pop();
+    const g = await gh.createGist({ [name]: { content: f.text() } }, "n3xn gist", false);
+    print(g.html_url, "ok");
+    return;
+  }
+  if (sub === "search") {
+    const q = args.slice(1).join(" ");
+    if (!q) throw new Error("Usage: gh search <query>");
+    const r = await gh.searchRepos(q);
+    (r.items || []).slice(0, 15).forEach((x) => print(`${x.full_name} ★${x.stargazers_count}`));
+    return;
+  }
+  if (sub === "star") {
+    const spec = args[1];
+    if (!spec?.includes("/")) throw new Error("Usage: gh star owner/repo");
+    const [o, r] = spec.split("/");
+    await gh.starRepo(o, r);
+    return;
+  }
+  if (sub === "rm" || sub === "delete") {
+    const cr = gh.getCurrentRepo();
+    if (!cr) throw new Error("gh use owner/repo first");
+    const path = args[1];
+    if (!path) throw new Error("Usage: gh rm <path>");
+    await gh.deleteRemoteFile(cr.owner, cr.repo, path, args.slice(2).join(" ") || undefined, cr.branch);
+    print("Deleted remote " + path, "ok");
+    return;
+  }
+  print('Unknown gh command. Try: gh help');
+}
