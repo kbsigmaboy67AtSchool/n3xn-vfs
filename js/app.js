@@ -189,6 +189,12 @@ async function bootApp() {
   await refreshTree();
   window.refreshTree = refreshTree;
   bindToolButtons(); // re-bind after UI is visible
+  import("./github.js")
+    .then((gh) => gh.loadSavedToken())
+    .then((u) => {
+      if (u) setStatus("Ready · GitHub @" + u.login);
+    })
+    .catch(() => {});
   setStatus("Ready — encrypted & local");
 }
 
@@ -643,3 +649,194 @@ function setStatus(msg) {
 
 // Start
 showAuth();
+
+
+/* ========== PWA / Service Worker (ChromeOS install) ========== */
+let deferredInstallPrompt = null;
+
+export function registerServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+  const swUrl = new URL("../sw.js", import.meta.url);
+  // Prefer root-relative so scope covers the app
+  const path = "./sw.js";
+  navigator.serviceWorker
+    .register(path, { scope: "./" })
+    .then((reg) => {
+      console.log("[n3xn] SW registered", reg.scope);
+      reg.update().catch(() => {});
+    })
+    .catch((err) => console.warn("[n3xn] SW register failed", err));
+}
+
+function setupInstallPrompt() {
+  const btn = document.getElementById("btn-install-pwa");
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (btn) {
+      btn.classList.remove("hidden");
+      btn.style.display = "inline-block";
+    }
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    if (btn) {
+      btn.style.display = "none";
+      btn.classList.add("hidden");
+    }
+    setStatus?.("App installed");
+  });
+  if (btn) {
+    btn.onclick = async () => {
+      if (!deferredInstallPrompt) {
+        alert(
+          "Install not available yet.\n\nOn ChromeOS: open the browser menu (⋮) → Install page / Save and share → Install n3xn VFS.\n\nNeeds HTTPS + this site opened in Chrome."
+        );
+        return;
+      }
+      deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      if (btn) btn.style.display = "none";
+      console.log("[n3xn] install choice", choice);
+    };
+  }
+}
+
+registerServiceWorker();
+setupInstallPrompt();
+
+
+/* ========== GitHub panel ========== */
+(function setupGithubUi() {
+  const btn = document.getElementById("btn-github");
+  if (!btn) return;
+  btn.onclick = async () => {
+    try {
+      const gh = await import("./github.js");
+      const storage = await import("./storage-backends.js");
+      gh.setLogger((msg) => {
+        try {
+          const el = document.getElementById("terminal-output");
+          if (el) {
+            const d = document.createElement("div");
+            d.className = "out";
+            d.textContent = msg;
+            el.appendChild(d);
+          }
+        } catch (_) {}
+      });
+      // try restore token
+      if (!gh.isAuthed() && db.getPassword()) {
+        await gh.loadSavedToken().catch(() => {});
+      }
+      openGithubPanel(gh, storage);
+    } catch (e) {
+      alert("GitHub module: " + e.message);
+    }
+  };
+
+  function openGithubPanel(gh, storage) {
+    let panel = document.getElementById("github-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "github-panel";
+      panel.style.cssText =
+        "position:fixed;inset:24px;z-index:99998;background:#0a0a0f;border:1px solid #333;" +
+        "border-radius:8px;display:flex;flex-direction:column;box-shadow:0 0 40px rgba(255,255,255,0.1);overflow:hidden";
+      panel.innerHTML = `
+        <div style="padding:10px 14px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center">
+          <strong style="color:#8cf">GitHub VFS</strong>
+          <button type="button" id="gh-close" class="btn small ghost">✕</button>
+        </div>
+        <div style="padding:12px 14px;overflow:auto;flex:1;font-size:12px;color:#ccc" id="gh-body"></div>
+      `;
+      document.body.appendChild(panel);
+      panel.querySelector("#gh-close").onclick = () => {
+        panel.style.display = "none";
+      };
+    }
+    panel.style.display = "flex";
+    const body = panel.querySelector("#gh-body");
+    const u = gh.getUser();
+    const cr = gh.getCurrentRepo();
+    body.innerHTML = `
+      <p style="color:#888;margin:0 0 10px">Separate from local VFS. Cache under <code>/gh/owner/repo/</code>. Token encrypted with account password.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+        <button type="button" class="btn small primary" id="gh-auth">Set classic PAT</button>
+        <button type="button" class="btn small" id="gh-repos">List repos</button>
+        <button type="button" class="btn small" id="gh-pull">Pull tree</button>
+        <button type="button" class="btn small" id="gh-help">Token help</button>
+        <button type="button" class="btn small ghost" id="gh-logout">Clear token</button>
+      </div>
+      <p><b>User:</b> ${u ? u.login : "(not signed in)"}</p>
+      <p><b>Repo:</b> ${cr ? cr.owner + "/" + cr.repo + "@" + cr.branch : "(none — gh use owner/repo)"}</p>
+      <p><b>Cache storage:</b> ${storage.getBackendId()} —
+        <select id="gh-storage">
+          ${storage.listBackends().map((b) => `<option value="${b.id}" ${b.id === storage.getBackendId() ? "selected" : ""}>${b.label}</option>`).join("")}
+        </select>
+      </p>
+      <label>owner/repo</label>
+      <input id="gh-repo-input" placeholder="owner/repo" value="${cr ? cr.owner + "/" + cr.repo : ""}"
+        style="width:100%;margin:4px 0 8px;padding:6px;background:#111;border:1px solid #333;color:#eee" />
+      <button type="button" class="btn small" id="gh-use">Use repo</button>
+      <pre id="gh-out" style="margin-top:12px;background:#05070f;padding:8px;max-height:40vh;overflow:auto;white-space:pre-wrap"></pre>
+    `;
+    const out = (s) => {
+      body.querySelector("#gh-out").textContent = typeof s === "string" ? s : JSON.stringify(s, null, 2);
+    };
+    body.querySelector("#gh-auth").onclick = async () => {
+      const tok = prompt("GitHub classic token (ghp_…):");
+      if (!tok) return;
+      try {
+        const user = await gh.setToken(tok);
+        out("Signed in as " + user.login);
+        openGithubPanel(gh, storage);
+      } catch (e) {
+        out("Error: " + e.message);
+      }
+    };
+    body.querySelector("#gh-logout").onclick = async () => {
+      await gh.clearToken();
+      openGithubPanel(gh, storage);
+    };
+    body.querySelector("#gh-help").onclick = () => out(gh.tokenHelp());
+    body.querySelector("#gh-repos").onclick = async () => {
+      try {
+        const repos = await gh.listRepos();
+        out(repos.map((r) => `${r.private ? "[private]" : "[public]"} ${r.full_name}`).join("\n"));
+      } catch (e) {
+        out(e.message);
+      }
+    };
+    body.querySelector("#gh-use").onclick = async () => {
+      const spec = body.querySelector("#gh-repo-input").value.trim();
+      if (!spec.includes("/")) return out("owner/repo required");
+      const [o, r] = spec.split("/");
+      try {
+        await gh.setRepo(o, r);
+        openGithubPanel(gh, storage);
+      } catch (e) {
+        out(e.message);
+      }
+    };
+    body.querySelector("#gh-pull").onclick = async () => {
+      const cr2 = gh.getCurrentRepo();
+      if (!cr2) return out("Select a repo first");
+      try {
+        const n = await gh.pullTree(cr2.owner, cr2.repo, cr2.branch);
+        out("Pulled " + n + " files");
+        if (window.refreshTree) window.refreshTree();
+      } catch (e) {
+        out(e.message);
+      }
+    };
+    body.querySelector("#gh-storage").onchange = (e) => {
+      storage.setBackend(e.target.value);
+      out("Storage: " + storage.getBackendId());
+    };
+  }
+})();
+
+// Restore GitHub token after login
+const _bootApp = typeof bootApp === "function" ? bootApp : null;
