@@ -235,6 +235,11 @@ async function run(line) {
       case "github":
         await cmdGithub(args);
         break;
+      case "n3link":
+      case "n3-site":
+      case "n3site":
+        await cmdN3Site(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -815,6 +820,7 @@ function showHelp() {
     "  wss connect|chat|share|pull|collab|status|disconnect",
     "  python <file.py> | python -c <code> | python canvas",
     "  gh help|auth|repos|use|pull-tree|commit|pr|issues|storage …",
+    "  n3link <path> | n3site run|expand|list|help",
     "  logs on|off|copy|clear  — mirror browser console to terminal",
     "  cmd list|add|rm   — manage custom commands",
     "",
@@ -1045,4 +1051,53 @@ async function cmdGithub(args) {
     return;
   }
   print('Unknown gh command. Try: gh help');
+}
+
+
+async function cmdN3Site(args) {
+  const site = await import("./n3-site.js");
+  const sub = (args[0] || "help").toLowerCase();
+  if (sub === "help" || sub === "-h") {
+    print("n3-site multi-file HTML");
+    print("  Directive: _;:(content-type)[kind]{vfs-path}blob|data");
+    print("  kinds: script, script-module, stylesheet|css, link");
+    print("  n3link <path> [blob|data] [mime]");
+    print("  n3site expand|run <file.n3-site> | n3site list [prefix]");
+    return;
+  }
+  if (sub === "list") {
+    const list = await site.listVfs(args[1] || "/");
+    list.forEach((p) => print(p));
+    print(list.length + " files", "ok");
+    return;
+  }
+  if (sub === "expand") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    const f = await fs.readFile(path);
+    if (!f) throw new Error("not found");
+    const { html, assets } = await site.expandN3Site(f.text());
+    assets.forEach((a) => print((a.error ? "ERR " : "OK  ") + (a.path || "") + " " + (a.url || a.error || "")));
+    print("expanded HTML length " + html.length, "ok");
+    return;
+  }
+  if (sub === "run") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    const { url, assets } = await site.runN3Site(path);
+    assets.forEach((a) => print((a.url || a.error) + " <- " + a.path));
+    print("Opened " + url, "ok");
+    return;
+  }
+  let path = sub;
+  let method = args[1] || "blob";
+  let mime = args[2];
+  if (sub === "link" || sub === "make") {
+    path = args[1];
+    method = args[2] || "blob";
+    mime = args[3];
+  }
+  path = resolve(path);
+  if (!path) throw new Error("Usage: n3link <path> [blob|data] [mime]");
+  const link = await site.makeLink(path, { method, mime });
+  print(link.method + " " + link.mime + " " + link.size + "b");
+  print(link.url, "ok");
 }
