@@ -5,8 +5,6 @@
 import * as fs from "./fs.js";
 import * as db from "./db.js";
 import * as runner from "./runner.js";
-import * as collab from "./collab.js";
-import * as python from "./python.js";
 
 const outputEl = () => document.getElementById("terminal-output");
 const inputEl = () => document.getElementById("terminal-input");
@@ -16,13 +14,21 @@ let history = [];
 let histIdx = -1;
 let customCommands = {}; // user-defined: name -> { code, desc }
 
+async function loadCollab() {
+  return import("./collab.js");
+}
+async function loadPython() {
+  return import("./python.js");
+}
+
 export function initTerminal() {
   const input = inputEl();
   input.addEventListener("keydown", onKey);
   print("n3xn Virtual FileSystem v2 — Terminal", "ok");
-  print('help · python · wss · logs on|off|copy|clear', "out");
-  collab.setLogger((msg, cls) => print(msg, cls || "out"));
-  python.setPythonLogger((msg, cls) => print(msg, cls || "out"));
+  print("help · python · wss · logs on|off|copy|clear", "out");
+  loadCollab()
+    .then((collab) => collab.setLogger((msg, cls) => print(msg, cls || "out")))
+    .catch((e) => print("collab module unavailable: " + e.message, "err"));
   installConsoleBridge();
   loadCustomCommands();
 }
@@ -657,6 +663,7 @@ async function cmdWebfile(args) {
  * URL example: wss://your-worker.workers.dev/my-room
  */
 async function cmdWss(args) {
+  const collab = await loadCollab();
   const sub = (args[0] || "status").toLowerCase();
 
   if (sub === "help" || sub === "-h") {
@@ -739,6 +746,13 @@ async function cmdWss(args) {
 }
 
 async function cmdPython(args) {
+  let python;
+  try {
+    python = await loadPython();
+  } catch (e) {
+    throw new Error("Python module failed to load (is js/python.js deployed?): " + e.message);
+  }
+  python.setPythonLogger((msg, cls) => print(msg, cls || "out"));
   if (args[0] === "canvas") {
     python.showGameCanvas();
     print("Game canvas shown", "ok");
@@ -748,7 +762,6 @@ async function cmdPython(args) {
     python.hideGameCanvas();
     return;
   }
-  // py <file>  or  py -c "code"
   if (args[0] === "-c") {
     const code = args.slice(1).join(" ");
     await python.runPython(code, { showCanvas: /canvas|arcade/i.test(code) });
