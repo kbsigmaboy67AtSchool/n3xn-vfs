@@ -119,6 +119,7 @@ export function detectRunner(path) {
   if (["html", "htm"].includes(e)) return "html-window";
   if (["js", "mjs", "cjs"].includes(e)) return "js";
   if (e === "py") return "python";
+  if (e === "n3-site") return "n3-site";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -405,6 +406,27 @@ export async function runText(path) {
   return url;
 }
 
+
+/* ========== .n3-site multi-file HTML ========== */
+export async function runN3SiteFile(path) {
+  const site = await import("./n3-site.js");
+  const { url, assets, errors } = await site.runN3Site(path);
+  termPrint(`n3-site expanded ${assets.length} asset(s)`, "ok");
+  assets.forEach((a) => {
+    if (a.error) termPrint(`  ! ${a.path}: ${a.error}`, "err");
+    else termPrint(`  ${a.method} ${a.path} → ${a.url}`, "out");
+  });
+  window.open(url, "_blank");
+  try {
+    showPreview(
+      `<iframe src="${url}" style="width:100%;height:100%;border:0;background:#fff" allow="fullscreen" allowfullscreen></iframe>`,
+      path,
+      url
+    );
+  } catch (_) {}
+  return url;
+}
+
 /* ========== Python (Pyodide) ========== */
 export async function runPython(path) {
   const py = await import("./python.js");
@@ -437,6 +459,9 @@ export async function run(path, mode) {
     case "python":
     case "py":
       return runPython(path);
+    case "n3-site":
+    case "n3site":
+      return runN3SiteFile(path);
     case "image":
       return runImage(path);
     case "markdown":
