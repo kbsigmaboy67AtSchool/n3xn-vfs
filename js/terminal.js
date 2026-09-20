@@ -1662,3 +1662,208 @@ async function cmdTerminalUi(args) {
   }
   print("Usage: terminal fullscreen");
 }
+
+
+/* ========== Storage backends / perf / nexc ========== */
+
+async function cmdStorage(args) {
+  const storage = await import("./storage-backends.js");
+  const sub = (args[0] || "info").toLowerCase();
+
+  if (sub === "list" || sub === "backends") {
+    storage.listBackends().forEach((b) => {
+      const mark = b.id === storage.getBackendId() ? " *" : "";
+      print(b.id + mark + " — " + b.label);
+    });
+    return;
+  }
+  if (sub === "use" || sub === "set") {
+    if (!args[1]) throw new Error("Usage: storage use idb|opfs|cache|memory");
+    storage.setBackend(args[1]);
+    print("Active backend: " + storage.getBackendId(), "ok");
+    return;
+  }
+  if (sub === "info") {
+    const info = await storage.storageInfo();
+    print(JSON.stringify(info, null, 2));
+    return;
+  }
+  if (sub === "ls") {
+    const be = storage.getBackend();
+    const prefix = args[1] || "";
+    let items = [];
+    try {
+      items = await be.list();
+    } catch (e) {
+      // fallback idb
+      items = await storage.idbListFiles();
+    }
+    items
+      .filter((x) => !prefix || (x.path || x.key || "").includes(prefix))
+      .forEach((x) => {
+        const p = x.path || x.key;
+        const sys = storage.isSystemPath(p) ? " [SYSTEM]" : "";
+        print(`${p}${sys}  ${x.size != null ? x.size + "b" : ""}`);
+      });
+    return;
+  }
+  if (sub === "meta") {
+    const keys = await storage.idbGetMetaKeys();
+    keys.forEach((k) => print(`${k.key}${k.system ? " [SYSTEM]" : ""}`));
+    return;
+  }
+  if (sub === "cat" || sub === "view") {
+    const path = resolve(args[1] || "");
+    if (!path) throw new Error("Usage: storage cat <path>");
+    if (storage.isSystemPath(path)) {
+      print("⚠ SYSTEM path — sensitive (secrets / settings). Proceed with care.", "err");
+    }
+    const be = storage.getBackend();
+    let f = await be.get(path);
+    if (!f) f = await db.getFile(path);
+    if (!f) throw new Error("Not found in active backend / IDB");
+    const text = typeof f.text === "function" ? f.text() : new TextDecoder().decode(f.content);
+    print(text.length > 80000 ? text.slice(0, 80000) + "\n… truncated" : text);
+    return;
+  }
+  if (sub === "put" || sub === "write") {
+    const path = resolve(args[1] || "");
+    const content = args.slice(2).join(" ");
+    if (!path) throw new Error("Usage: storage put <path> <text…>");
+    if (storage.isSystemPath(path)) {
+      if (!confirm("⚠ SYSTEM path: " + path + "\nModify anyway?")) {
+        print("Aborted", "err");
+        return;
+      }
+    }
+    const be = storage.getBackend();
+    const bytes = new TextEncoder().encode(content);
+    await be.put(path, bytes, { mime: "text/plain" });
+    print("Wrote " + path + " via " + be.id, "ok");
+    return;
+  }
+  if (sub === "rm" || sub === "delete") {
+    const path = resolve(args[1] || "");
+    if (!path) throw new Error("Usage: storage rm <path>");
+    if (storage.isSystemPath(path)) {
+      if (!confirm("⚠ DELETE SYSTEM path: " + path + "\nAre you sure?")) {
+        print("Aborted", "err");
+        return;
+      }
+    }
+    const be = storage.getBackend();
+    await be.del(path);
+    print("Deleted " + path, "ok");
+    return;
+  }
+  if (sub === "experimental-patch") {
+    const on = args[1] === "on" || args[1] === "1" || args[1] === "true";
+    storage.setExperimentalPatch(on);
+    print("Experimental large-file patch: " + (storage.getExperimentalPatch() ? "ON" : "OFF"), "ok");
+    return;
+  }
+  print("Usage: storage list|use|info|ls|meta|cat|put|rm|experimental-patch on|off");
+}
+
+async function cmdPerf(args) {
+  const perf = await import("./performance.js");
+  const sub = (args[0] || "report").toLowerCase();
+  if (sub === "json") {
+    print(JSON.stringify(await perf.collectReport(), null, 2));
+    return;
+  }
+  const r = await perf.collectReport();
+  print(perf.formatReport(r));
+}
+
+async function cmdNexc(args) {
+  const nexc = await import("./nexc.js");
+  const sub = (args[0] || "help").toLowerCase();
+  if (sub === "help" || sub === "-h") {
+    print(`.nexc packages
+  nexc list <file.nexc>
+  nexc modules <file.nexc>
+  nexc run <file.nexc> [module]
+  nexc --r <file.nexc> [module]     (same as run)
+  nexc remote <url> [module]        (confirm permissions)
+
+Example file:
+  [nexc]
+  name = demo
+  default = build
+  [permissions]
+  terminal
+  vfs.write
+  [module build]
+  echo hello
+  parallel
+    echo a
+    echo b
+  wait 100ms
+  echo done`);
+    return;
+  }
+
+  async function loadLocal(path) {
+    const f = await fs.readFile(resolve(path));
+    if (!f) throw new Error("Not found: " + path);
+    return nexc.parseNexc(f.text());
+  }
+
+  if (sub === "list" || sub === "modules") {
+    const parsed = await loadLocal(args[1]);
+    print(`${parsed.meta.name} v${parsed.meta.version} default=${parsed.meta.default}`);
+    print("permissions: " + (parsed.permissions.join(", ") || "(none)"));
+    print("modules:");
+    Object.keys(parsed.modules).forEach((m) => print("  • " + m + (m === parsed.meta.default ? " (default)" : "")));
+    return;
+  }
+
+  if (sub === "run" || sub === "--r" || sub === "-r") {
+    const path = args[1];
+    const mod = args[2];
+    if (!path) throw new Error("Usage: nexc run <file.nexc> [module]");
+    const parsed = await loadLocal(path);
+    const ok = await nexc.confirmPermissions(parsed.permissions, { source: path });
+    if (!ok) {
+      print("Aborted", "err");
+      return;
+    }
+    await nexc.runNexc(parsed, mod, {
+      runLine: (line) => run(line),
+      log: (m, c) => print(m, c || "out"),
+    });
+    return;
+  }
+
+  if (sub === "remote") {
+    const url = args[1];
+    const mod = args[2];
+    if (!url) throw new Error("Usage: nexc remote <url> [module]");
+    const { parsed } = await nexc.loadNexcFromUrl(url);
+    const ok = await nexc.confirmPermissions(parsed.permissions, { remote: true, source: url });
+    if (!ok) {
+      print("Aborted", "err");
+      return;
+    }
+    await nexc.runNexc(parsed, mod, {
+      runLine: (line) => run(line),
+      log: (m, c) => print(m, c || "out"),
+    });
+    return;
+  }
+
+  // nexc file.nexc  shorthand
+  if (args[0] && (args[0].endsWith(".nexc") || args[0].includes("/"))) {
+    const parsed = await loadLocal(args[0]);
+    const ok = await nexc.confirmPermissions(parsed.permissions, { source: args[0] });
+    if (!ok) return;
+    await nexc.runNexc(parsed, args[1], {
+      runLine: (line) => run(line),
+      log: (m, c) => print(m, c || "out"),
+    });
+    return;
+  }
+
+  print("Usage: nexc help|list|run|remote …");
+}
