@@ -13,6 +13,9 @@ let cwd = "/";
 let history = [];
 let histIdx = -1;
 let customCommands = {}; // user-defined: name -> { code, desc }
+let aliases = {}; // name -> expansion string
+const fileUndo = new Map(); // path -> { stack, redo }
+const MAX_UNDO = 30;
 
 async function loadCollab() {
   return import("./collab.js");
