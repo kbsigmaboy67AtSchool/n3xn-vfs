@@ -240,6 +240,10 @@ async function run(line) {
       case "n3site":
         await cmdN3Site(args);
         break;
+      case "react":
+      case "jsx":
+        await cmdReact(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -1100,4 +1104,25 @@ async function cmdN3Site(args) {
   const link = await site.makeLink(path, { method, mime });
   print(link.method + " " + link.mime + " " + link.size + "b");
   print(link.url, "ok");
+}
+
+
+async function cmdReact(args) {
+  const rr = await import("./react-runner.js");
+  const sub = (args[0] || "run").toLowerCase();
+  if (sub === "help") {
+    print("react run [entry.jsx]  — Babel JSX/TSX + VFS imports + React 18 CDN");
+    print("  Entry default: active file or main.jsx / index.jsx / App.jsx nearby");
+    print("  import React from 'react' resolves to esm.sh");
+    print("  import './App.jsx' and import './app.css' resolve from VFS");
+    print("  Not full Vite (no Node/HMR); Vite-style multi-file React apps yes");
+    return;
+  }
+  let path = sub === "run" ? args[1] : args[0];
+  path = resolve(path || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: react run <entry.jsx>");
+  const entry = await rr.detectReactEntry(path);
+  print("entry " + entry);
+  const result = await rr.runReact(entry, { log: (m, c) => print(m, c || "out") });
+  print(result.moduleCount + " modules → " + result.url, "ok");
 }
