@@ -120,6 +120,7 @@ export function detectRunner(path) {
   if (["js", "mjs", "cjs"].includes(e)) return "js";
   if (e === "py") return "python";
   if (e === "n3-site") return "n3-site";
+  if (e === "jsx" || e === "tsx") return "react";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -407,6 +408,27 @@ export async function runText(path) {
 }
 
 
+
+/* ========== React / JSX (browser Babel) ========== */
+export async function runReactFile(path) {
+  const rr = await import("./react-runner.js");
+  const entry = await rr.detectReactEntry(path);
+  termPrint("React entry: " + entry, "out");
+  const result = await rr.runReact(entry, {
+    log: (m, c) => termPrint(m, c || "out"),
+  });
+  termPrint(`React modules: ${result.moduleCount}, css: ${result.cssCount}`, "ok");
+  termPrint(result.url, "out");
+  try {
+    showPreview(
+      `<iframe src="${result.url}" style="width:100%;height:100%;border:0;background:#0a0a0f" allow="fullscreen" allowfullscreen></iframe>`,
+      path,
+      result.url
+    );
+  } catch (_) {}
+  return result.url;
+}
+
 /* ========== .n3-site multi-file HTML ========== */
 export async function runN3SiteFile(path) {
   const site = await import("./n3-site.js");
@@ -462,6 +484,10 @@ export async function run(path, mode) {
     case "n3-site":
     case "n3site":
       return runN3SiteFile(path);
+    case "react":
+    case "jsx":
+    case "tsx":
+      return runReactFile(path);
     case "image":
       return runImage(path);
     case "markdown":
