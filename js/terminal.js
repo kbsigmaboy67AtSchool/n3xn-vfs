@@ -28,6 +28,8 @@ async function loadStorage() {
 }
 
 export function initTerminal() {
+  loadAliases().catch(() => {});
+
   const input = inputEl();
   input.addEventListener("keydown", onKey);
   print("n3xn Virtual FileSystem v2 — Terminal", "ok");
@@ -95,6 +97,22 @@ function printHtml(html) {
 }
 
 async function onKey(e) {
+  // Ctrl+R — reverse history search
+  if (e.ctrlKey && (e.key === "r" || e.key === "R")) {
+    e.preventDefault();
+    const q = prompt("History search:");
+    if (!q) return;
+    const hit = [...history].reverse().find((h) => h.toLowerCase().includes(q.toLowerCase()));
+    if (hit) inputEl().value = hit;
+    else print("No history match for: " + q, "err");
+    return;
+  }
+  // Ctrl+Shift+F — fullscreen terminal
+  if (e.ctrlKey && e.shiftKey && (e.key === "F" || e.key === "f")) {
+    e.preventDefault();
+    toggleTerminalFullscreen();
+    return;
+  }
   if (e.key === "Enter") {
     const cmd = inputEl().value.trim();
     inputEl().value = "";
@@ -122,9 +140,20 @@ async function onKey(e) {
 }
 
 async function run(line) {
-  const parts = parseArgs(line);
-  const cmd = parts[0];
-  const args = parts.slice(1);
+  let parts = parseArgs(line);
+  let cmd = parts[0];
+  let args = parts.slice(1);
+
+  // Expand alias (simple: first word only; supports "$1" etc via join rest)
+  if (aliases[cmd]) {
+    const exp = aliases[cmd];
+    const expanded = exp.includes("$")
+      ? exp.replace(/\$(\d+)/g, (_, n) => args[Number(n) - 1] ?? "").replace(/\$@/g, args.join(" "))
+      : exp + (args.length ? " " + args.join(" ") : "");
+    parts = parseArgs(expanded);
+    cmd = parts[0];
+    args = parts.slice(1);
+  }
 
   try {
     if (customCommands[cmd]) {
@@ -152,7 +181,7 @@ async function run(line) {
         break;
       case "cat":
       case "type":
-        await cmdCat(args[0]);
+        await cmdCat(args);
         break;
       case "mkdir":
         await cmdMkdir(args);
@@ -320,23 +349,28 @@ async function cmdLs(args) {
   }
 }
 
-async function cmdCat(path) {
-  if (!path) throw new Error("Usage: cat <file>");
+async function cmdCat(argsOrPath) {
+  const args = Array.isArray(argsOrPath) ? argsOrPath : [argsOrPath];
+  const numbered = args.includes("-n");
+  const path = args.find((a) => a && !a.startsWith("-"));
+  if (!path) throw new Error("Usage: cat [-n] <file>");
   const f = await fs.readFile(resolve(path));
   if (!f) throw new Error("No such file");
-  // Limit display for huge files
-  const text = f.text();
+  let text = f.text();
   if (text.length > 100000) {
-    print(text.slice(0, 100000) + "\n\n... [truncated — file is " + f.size + " bytes]", "out");
-  } else {
-    print(text);
+    text = text.slice(0, 100000) + "\n\n... [truncated — file is " + f.size + " bytes]";
   }
+  if (numbered) {
+    text = text.split("\n").map((l, i) => String(i + 1).padStart(6) + "  " + l).join("\n");
+  }
+  print(text);
 }
 
 async function cmdMkdir(args) {
+  const parents = args.includes("-p") || args.includes("--parents");
   for (const a of args) {
     if (a.startsWith("-")) continue;
-    await fs.mkdir(resolve(a));
+    await fs.mkdir(resolve(a), { parents });
     print("Created: " + resolve(a), "ok");
   }
 }
@@ -815,8 +849,12 @@ async function cmdLogs(args) {
 function showHelp() {
   const lines = [
     "Built-in commands:",
-    "  help, clear, pwd, cd, ls [-l], cat, mkdir, touch, rm [-r],",
-    "  mv, cp, find <pattern>, echo, whoami, stat, tree,",
+    "  help, clear, pwd, cd, ls [-l], cat [-n], mkdir [-p], touch, rm [-r],",
+    "  mv, cp, find <pattern>, grep [-ri] <pat> [path], head/tail/wc/du/file,",
+    "  basename, dirname, which, sort, uniq, history, alias, unalias,",
+    "  append|prepend|replace|insert|delline|undo|redo|diff,",
+    "  project stats|tree|info, debug <file>, web run, terminal fullscreen,",
+    "  find <pattern>, echo, whoami, stat, tree,",
     "  export [fs|path], patch <pat> <search> <replace> [--dry],",
     "  run [mode] <file>  — html|html-window|js|image|markdown|json|css|text|blob-open",
     "  blob make|list|open|watch|clear <file|idx>",
@@ -1125,4 +1163,502 @@ async function cmdReact(args) {
   print("entry " + entry);
   const result = await rr.runReact(entry, { log: (m, c) => print(m, c || "out") });
   print(result.moduleCount + " modules → " + result.url, "ok");
+}
+
+
+/* ========== Quick-win utilities ========== */
+
+function basenameArg(p) {
+  const n = resolve(p || "");
+  const parts = n.split("/").filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : "/";
+}
+function dirnameArg(p) {
+  const n = resolve(p || "");
+  if (n === "/") return "/";
+  const parts = n.split("/").filter(Boolean);
+  parts.pop();
+  return "/" + parts.join("/") || "/";
+}
+
+async function pushUndo(path, text) {
+  path = resolve(path);
+  if (!fileUndo.has(path)) fileUndo.set(path, { stack: [], redo: [] });
+  const u = fileUndo.get(path);
+  u.stack.push(text);
+  if (u.stack.length > MAX_UNDO) u.stack.shift();
+  u.redo = [];
+}
+
+async function cmdGrep(args) {
+  let recursive = false, inv = false, ignoreCase = false, filesOnly = false, context = 0;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-r" || a === "-R") recursive = true;
+    else if (a === "-i") ignoreCase = true;
+    else if (a === "-v") inv = true;
+    else if (a === "-l") filesOnly = true;
+    else if (a === "-n") { /* always show lines */ }
+    else if (a === "-C" && args[i + 1]) { context = parseInt(args[++i], 10) || 0; }
+    else if (a.startsWith("-")) continue;
+    else pos.push(a);
+  }
+  const pattern = pos[0];
+  const target = resolve(pos[1] || cwd);
+  if (!pattern) throw new Error("Usage: grep [-ril] [-C n] <pattern> [path]");
+  const re = new RegExp(pattern, ignoreCase ? "i" : "");
+  let files = [];
+  if (fs.isDir(target) || recursive) {
+    const all = fs.flatten(fs.isDir(target) ? target : cwd);
+    files = all.filter((f) => f.type !== "dir").map((f) => f.path);
+    if (!recursive && fs.isDir(target)) {
+      files = fs.ls(target).filter((e) => e.type !== "dir").map((e) => (target === "/" ? "/" + e.name : target + "/" + e.name));
+    }
+  } else {
+    files = [target];
+  }
+  let hits = 0;
+  for (const path of files) {
+    const f = await fs.readFile(path);
+    if (!f) continue;
+    let text;
+    try { text = f.text(); } catch { continue; }
+    const lines = text.split("\n");
+    let fileHit = false;
+    for (let i = 0; i < lines.length; i++) {
+      const ok = re.test(lines[i]);
+      if (inv ? !ok : ok) {
+        fileHit = true;
+        if (filesOnly) break;
+        if (context > 0) {
+          const from = Math.max(0, i - context);
+          const to = Math.min(lines.length - 1, i + context);
+          for (let j = from; j <= to; j++) {
+            print(`${path}:${j + 1}:${lines[j]}`);
+          }
+          print("--");
+        } else {
+          print(`${path}:${i + 1}:${lines[i]}`);
+        }
+        hits++;
+      }
+    }
+    if (filesOnly && fileHit) {
+      print(path);
+      hits++;
+    }
+  }
+  if (!hits) print("No matches");
+  else print(`${hits} match(es)`, "ok");
+}
+
+async function cmdHead(args) {
+  let n = 10;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-n" && args[i + 1]) n = parseInt(args[++i], 10) || 10;
+    else if (/^-(\d+)$/.test(args[i])) n = parseInt(args[i].slice(1), 10);
+    else if (!args[i].startsWith("-")) pos.push(args[i]);
+  }
+  const path = resolve(pos[0] || window.__n3xnActivePath);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  print(f.text().split("\n").slice(0, n).join("\n"));
+}
+
+async function cmdTail(args) {
+  let n = 10;
+  const pos = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "-n" && args[i + 1]) n = parseInt(args[++i], 10) || 10;
+    else if (/^-(\d+)$/.test(args[i])) n = parseInt(args[i].slice(1), 10);
+    else if (!args[i].startsWith("-")) pos.push(args[i]);
+  }
+  const path = resolve(pos[0] || window.__n3xnActivePath);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const lines = f.text().split("\n");
+  print(lines.slice(Math.max(0, lines.length - n)).join("\n"));
+}
+
+async function cmdWc(args) {
+  const path = resolve(args.find((a) => !a.startsWith("-")) || window.__n3xnActivePath);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const text = f.text();
+  const lines = text ? text.split("\n").length : 0;
+  const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+  const chars = text.length;
+  print(`${lines} ${words} ${chars} ${path}`);
+}
+
+async function cmdDu(args) {
+  const path = resolve(args[0] || cwd);
+  const all = fs.flatten(path);
+  let total = 0;
+  for (const e of all) {
+    if (e.type === "dir") continue;
+    total += e.size || 0;
+    if (args.includes("-a")) print(`${e.size || 0}\t${e.path}`);
+  }
+  print(`${total}\t${path}`, "ok");
+}
+
+async function cmdFile(args) {
+  const path = resolve(args[0] || window.__n3xnActivePath);
+  if (!fs.exists(path)) throw new Error("Not found");
+  if (fs.isDir(path)) {
+    print(`${path}: directory`);
+    return;
+  }
+  const f = await fs.readFile(path);
+  print(`${path}: ${f.mime || "unknown"} (${f.size} bytes)`);
+}
+
+async function cmdWhich(args) {
+  const name = args[0];
+  if (!name) throw new Error("Usage: which <command>");
+  if (aliases[name]) {
+    print(`${name}: aliased to ${aliases[name]}`);
+    return;
+  }
+  if (customCommands[name]) {
+    print(`${name}: custom command`);
+    return;
+  }
+  // built-ins — if we got here switch would handle it
+  const builtins = ["help","clear","pwd","cd","ls","cat","grep","find","run","python","react","gh","wss","debug","web","project"];
+  if (builtins.includes(name) || true) {
+    print(`${name}: n3xn shell builtin / runtime`);
+  }
+}
+
+async function cmdSort(args) {
+  const path = resolve(args.find((a) => !a.startsWith("-")) || window.__n3xnActivePath);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  let lines = f.text().split("\n");
+  lines.sort((a, b) => (args.includes("-n") ? (parseFloat(a) - parseFloat(b)) : a.localeCompare(b)));
+  if (args.includes("-r")) lines.reverse();
+  print(lines.join("\n"));
+}
+
+async function cmdUniq(args) {
+  const path = resolve(args.find((a) => !a.startsWith("-")) || window.__n3xnActivePath);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const lines = f.text().split("\n");
+  const out = [];
+  for (const l of lines) {
+    if (!out.length || out[out.length - 1] !== l) out.push(l);
+  }
+  print(out.join("\n"));
+}
+
+async function cmdHistory(args) {
+  if (args[0] === "clear") {
+    history = [];
+    histIdx = 0;
+    print("History cleared", "ok");
+    return;
+  }
+  if (args[0] === "search" || args[0] === "-s") {
+    const q = (args[1] || "").toLowerCase();
+    history.filter((h) => h.toLowerCase().includes(q)).forEach((h, i) => print(`${i}  ${h}`));
+    return;
+  }
+  history.forEach((h, i) => print(`${String(i).padStart(4)}  ${h}`));
+}
+
+async function loadAliases() {
+  try {
+    const raw = await db.getMeta("shell_aliases");
+    if (raw && typeof raw === "object") aliases = raw;
+  } catch {}
+}
+async function saveAliases() {
+  await db.setMeta("shell_aliases", aliases);
+}
+
+async function cmdAlias(args) {
+  if (!args.length) {
+    Object.keys(aliases).forEach((k) => print(`alias ${k}='${aliases[k]}'`));
+    return;
+  }
+  const joined = args.join(" ");
+  const eq = joined.indexOf("=");
+  if (eq < 0) {
+    if (aliases[args[0]]) print(`alias ${args[0]}='${aliases[args[0]]}'`);
+    else print("No alias: " + args[0]);
+    return;
+  }
+  const name = joined.slice(0, eq).trim();
+  let val = joined.slice(eq + 1).trim();
+  if ((val.startsWith("'") && val.endsWith("'")) || (val.startsWith('"') && val.endsWith('"'))) {
+    val = val.slice(1, -1);
+  }
+  aliases[name] = val;
+  await saveAliases();
+  print(`alias ${name}='${val}'`, "ok");
+}
+
+async function cmdAppend(args, mode) {
+  const path = resolve(args[0]);
+  const text = args.slice(1).join(" ");
+  if (!path || text === undefined) throw new Error(`Usage: ${mode} <file> <text…>`);
+  const f = await fs.readFile(path);
+  const prev = f ? f.text() : "";
+  await pushUndo(path, prev);
+  const next = mode === "prepend" ? text + (prev ? "\n" + prev : "") : (prev ? prev + "\n" : "") + text;
+  await fs.writeFile(path, next);
+  print(`${mode} → ${path}`, "ok");
+}
+
+async function cmdReplace(args) {
+  // replace <file> <search> <replace>
+  if (args.length < 3) throw new Error("Usage: replace <file> <search> <replacement>");
+  const path = resolve(args[0]);
+  const search = args[1];
+  const rep = args.slice(2).join(" ");
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const prev = f.text();
+  await pushUndo(path, prev);
+  const next = prev.split(search).join(rep);
+  await fs.writeFile(path, next);
+  print(`replace done (${(prev.length - next.length) * -1} bytes Δ)`, "ok");
+}
+
+async function cmdInsert(args) {
+  // insert <file> <lineNo> <text>
+  if (args.length < 3) throw new Error("Usage: insert <file> <line> <text…>");
+  const path = resolve(args[0]);
+  const lineNo = parseInt(args[1], 10);
+  const text = args.slice(2).join(" ");
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const prev = f.text();
+  await pushUndo(path, prev);
+  const lines = prev.split("\n");
+  const idx = Math.max(0, Math.min(lines.length, lineNo - 1));
+  lines.splice(idx, 0, text);
+  await fs.writeFile(path, lines.join("\n"));
+  print(`inserted at line ${lineNo}`, "ok");
+}
+
+async function cmdDelLine(args) {
+  if (args.length < 2) throw new Error("Usage: delline <file> <line>");
+  const path = resolve(args[0]);
+  const lineNo = parseInt(args[1], 10);
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const prev = f.text();
+  await pushUndo(path, prev);
+  const lines = prev.split("\n");
+  if (lineNo < 1 || lineNo > lines.length) throw new Error("Line out of range");
+  lines.splice(lineNo - 1, 1);
+  await fs.writeFile(path, lines.join("\n"));
+  print(`deleted line ${lineNo}`, "ok");
+}
+
+async function cmdUndo(args) {
+  const path = resolve(args[0] || window.__n3xnActivePath);
+  const u = fileUndo.get(path);
+  if (!u || !u.stack.length) throw new Error("Nothing to undo for " + path);
+  const f = await fs.readFile(path);
+  const cur = f ? f.text() : "";
+  u.redo.push(cur);
+  const prev = u.stack.pop();
+  await fs.writeFile(path, prev);
+  print("undo → " + path, "ok");
+  if (window.__n3xnActivePath === path && window.__n3xnEditor) {
+    try { window.__n3xnEditor.setValue(prev); } catch {}
+  }
+}
+
+async function cmdRedo(args) {
+  const path = resolve(args[0] || window.__n3xnActivePath);
+  const u = fileUndo.get(path);
+  if (!u || !u.redo.length) throw new Error("Nothing to redo for " + path);
+  const f = await fs.readFile(path);
+  const cur = f ? f.text() : "";
+  u.stack.push(cur);
+  const next = u.redo.pop();
+  await fs.writeFile(path, next);
+  print("redo → " + path, "ok");
+  if (window.__n3xnActivePath === path && window.__n3xnEditor) {
+    try { window.__n3xnEditor.setValue(next); } catch {}
+  }
+}
+
+async function cmdDiff(args) {
+  if (args.length < 2) throw new Error("Usage: diff <fileA> <fileB>");
+  const a = await fs.readFile(resolve(args[0]));
+  const b = await fs.readFile(resolve(args[1]));
+  if (!a || !b) throw new Error("Both files required");
+  const la = a.text().split("\n");
+  const lb = b.text().split("\n");
+  const max = Math.max(la.length, lb.length);
+  let n = 0;
+  for (let i = 0; i < max; i++) {
+    if (la[i] !== lb[i]) {
+      print(`${i + 1}: - ${la[i] ?? ""}`);
+      print(`${i + 1}: + ${lb[i] ?? ""}`);
+      n++;
+      if (n > 200) {
+        print("… diff truncated");
+        break;
+      }
+    }
+  }
+  if (!n) print("Files identical", "ok");
+}
+
+async function cmdProject(args) {
+  const sub = (args[0] || "stats").toLowerCase();
+  const root = resolve(args[1] || "/");
+  const all = fs.flatten(root);
+  const files = all.filter((f) => f.type !== "dir");
+  if (sub === "tree") {
+    await cmdTree(root);
+    return;
+  }
+  if (sub === "files") {
+    files.forEach((f) => print(f.path));
+    return;
+  }
+  if (sub === "info" || sub === "stats") {
+    const byExt = {};
+    let total = 0;
+    for (const f of files) {
+      const ext = (f.path.split(".").pop() || "none").toLowerCase();
+      byExt[ext] = (byExt[ext] || 0) + 1;
+      total += f.size || 0;
+    }
+    print(`Project ${root}`);
+    print(`Files: ${files.length}  Dirs: ${all.length - files.length}`);
+    print(`Total size: ${total} bytes`);
+    Object.entries(byExt)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([k, v]) => print(`  .${k}: ${v}`));
+    return;
+  }
+  print("Usage: project stats|tree|files|info [path]");
+}
+
+async function cmdDebug(args) {
+  const path = resolve(args[0] || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: debug <file>");
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("No such file");
+  const text = f.text();
+  const ext = (path.split(".").pop() || "").toLowerCase();
+  print("N3XN DEBUGGER");
+  print("────────────────────────");
+  print("File: " + path);
+  print("Type: " + (f.mime || ext));
+  print("Size: " + f.size + " bytes");
+  const warnings = [];
+  const errors = [];
+  if (ext === "json") {
+    try {
+      JSON.parse(text);
+      print("✓ JSON parse");
+    } catch (e) {
+      errors.push(e.message);
+    }
+  }
+  if (["js", "jsx", "ts", "tsx"].includes(ext)) {
+    const opens = (text.match(/\{/g) || []).length;
+    const closes = (text.match(/\}/g) || []).length;
+    if (opens !== closes) warnings.push(`Brace mismatch { ${opens} vs } ${closes}`);
+    if (ext === "jsx" || ext === "tsx") {
+      if (!/from\s+['"]react['"]|require\(['"]react['"]\)/.test(text) && /<\w/.test(text)) {
+        warnings.push("JSX-like tags but no react import found");
+      }
+      try {
+        const Babel = window.Babel;
+        if (Babel) {
+          Babel.transform(text, { presets: ["react"], filename: path });
+          print("✓ Babel transform");
+        } else {
+          print("· Babel not loaded (run a react file once to load)");
+        }
+      } catch (e) {
+        errors.push("Babel: " + (e.message || e));
+      }
+    }
+  }
+  if (ext === "py") {
+    if (text.includes("\t") && text.includes("    ")) warnings.push("Mixed tabs and spaces");
+  }
+  if (ext === "html" || ext === "n3-site") {
+    if ((text.match(/<html/gi) || []).length && !(text.match(/<\/html>/gi) || []).length) {
+      warnings.push("Unclosed <html>");
+    }
+  }
+  if (!warnings.length && !errors.length) print("✓ No static issues detected", "ok");
+  if (warnings.length) {
+    print("Warnings:");
+    warnings.forEach((w) => print("⚠ " + w));
+  }
+  if (errors.length) {
+    print("Errors:");
+    errors.forEach((e) => print("✗ " + e, "err"));
+  }
+}
+
+async function cmdWeb(args) {
+  const sub = (args[0] || "run").toLowerCase();
+  if (sub === "run" || sub === "preview" || sub === "open") {
+    let path = resolve(args[1] || window.__n3xnActivePath || "");
+    if (!path || path === cwd) {
+      for (const name of ["index.html", "index.n3-site", "main.jsx", "App.jsx", "src/main.jsx"]) {
+        const cand = resolve(name);
+        if (fs.exists(cand)) {
+          path = cand;
+          break;
+        }
+      }
+    }
+    if (!path || !fs.exists(path)) throw new Error("No entry found (index.html / main.jsx / open a file)");
+    print("web → " + path);
+    await runner.run(path);
+    return;
+  }
+  if (sub === "stop") {
+    print("Close preview panel / blob tabs manually (browser)", "out");
+    return;
+  }
+  print("Usage: web run|preview|open|stop [path]");
+}
+
+function toggleTerminalFullscreen() {
+  const panel = document.getElementById("terminal-panel");
+  if (!panel) return;
+  const on = panel.classList.toggle("n3xn-term-fullscreen");
+  if (on) {
+    panel.style.cssText =
+      (panel.style.cssText || "") +
+      ";position:fixed;inset:0;z-index:99990;width:100%;height:100%;max-height:100%;";
+    print("Terminal fullscreen ON (Ctrl+Shift+F to exit)", "ok");
+  } else {
+    panel.style.position = "";
+    panel.style.inset = "";
+    panel.style.zIndex = "";
+    panel.style.width = "";
+    panel.style.height = "";
+    panel.style.maxHeight = "";
+    print("Terminal fullscreen OFF", "ok");
+  }
+}
+
+async function cmdTerminalUi(args) {
+  const sub = (args[0] || "fullscreen").toLowerCase();
+  if (sub === "fullscreen" || sub === "fs") {
+    toggleTerminalFullscreen();
+    return;
+  }
+  print("Usage: terminal fullscreen");
 }
