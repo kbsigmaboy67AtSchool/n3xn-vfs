@@ -1,3 +1,22 @@
+/** Bridge snippet for blob HTML/React previews — limited VFS-ish API (read-only by default) */
+export function n3xnStorageBridgeScript() {
+  return `<script>
+window.n3xn = window.n3xn || {};
+window.n3xn.storage = {
+  backend: function(){ return "preview-sandbox"; },
+  note: "Full IDB/OPFS APIs only inside n3xn shell. Preview has blob assets only.",
+  assets: window.n3xn && window.n3xn.assets || []
+};
+window.n3xn.perf = {
+  now: function(){ return performance.now(); },
+  memory: function(){
+    var m = performance.memory;
+    return m ? { used: m.usedJSHeapSize, total: m.totalJSHeapSize } : null;
+  }
+};
+</script>`;
+}
+
 /**
  * n3xn VFS v2 — Runners
  *
@@ -121,6 +140,7 @@ export function detectRunner(path) {
   if (e === "py") return "python";
   if (e === "n3-site") return "n3-site";
   if (e === "jsx" || e === "tsx") return "react";
+  if (e === "nexc") return "nexc";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -488,6 +508,12 @@ export async function run(path, mode) {
     case "jsx":
     case "tsx":
       return runReactFile(path);
+    case "nexc":
+      return (async () => {
+        const { print } = await import("./terminal.js").catch(() => ({ print: console.log }));
+        termPrint("Use: nexc run " + path, "out");
+        return path;
+      })();
     case "image":
       return runImage(path);
     case "markdown":
