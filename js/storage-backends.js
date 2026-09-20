@@ -223,3 +223,82 @@ export async function getSecret(key, password) {
 export async function deleteSecret(key) {
   await db.setMeta("secret:" + key, null);
 }
+
+
+/** System / sensitive meta keys — warn before edit/delete */
+export function isSystemPath(pathOrKey) {
+  const s = String(pathOrKey || "");
+  return (
+    /^secret:/i.test(s) ||
+    /^monaco_/i.test(s) ||
+    /^github_/i.test(s) ||
+    /^shell_aliases$/i.test(s) ||
+    /^custom_commands$/i.test(s) ||
+    /^opfs-meta:/i.test(s) ||
+    s.includes("/.n3xn/") ||
+    s.startsWith("/__n3xn")
+  );
+}
+
+export async function idbListFiles() {
+  return db.listAllFiles();
+}
+
+export async function idbGetMetaKeys() {
+  // best-effort: read known keys + scan via list if available
+  const known = [
+    "root",
+    "monaco_settings_global",
+    "monaco_presets",
+    "shell_aliases",
+    "custom_commands",
+    "github_current_repo",
+  ];
+  const out = [];
+  for (const k of known) {
+    try {
+      const v = await db.getMeta(k);
+      if (v != null) out.push({ key: k, system: isSystemPath(k) });
+    } catch {}
+  }
+  // secrets
+  try {
+    const sec = await db.getMeta("secret:github_pat");
+    if (sec != null) out.push({ key: "secret:github_pat", system: true });
+  } catch {}
+  return out;
+}
+
+export async function storageInfo() {
+  const info = {
+    active: getBackendId(),
+    backends: listBackends(),
+    idbFiles: 0,
+    idbBytes: 0,
+    quota: null,
+  };
+  try {
+    const files = await db.listAllFiles();
+    info.idbFiles = files.length;
+    info.idbBytes = files.reduce((a, f) => a + (f.size || 0), 0);
+  } catch {}
+  try {
+    if (navigator.storage?.estimate) {
+      const e = await navigator.storage.estimate();
+      info.quota = {
+        usage: e.usage,
+        quota: e.quota,
+      };
+    }
+  } catch {}
+  return info;
+}
+
+/** Experimental large-file patch (disabled by default) */
+let experimentalPatch = false;
+export function setExperimentalPatch(on) {
+  experimentalPatch = !!on;
+}
+export function getExperimentalPatch() {
+  return experimentalPatch;
+}
