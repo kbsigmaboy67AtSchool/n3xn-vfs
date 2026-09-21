@@ -400,10 +400,25 @@ async function handleMsg(msg) {
       }
       break;
     case "vc_signal":
-      await handleVcSignal(from, msg);
+    case "signal":
+      await handleSignal({ ...msg, id: msg.id || from, from });
       break;
+    case "voice-join":
+      peers.set(from, {
+        user: msg.u || msg.user || from,
+        mic: true,
+        level: 0,
+      });
+      if (inCall) ensurePeer(from, msg.u || msg.user || from, true);
+      ensureTile(from, {
+        name: msg.u || msg.user || from,
+        mode: "idle",
+      });
+      onPresence(getChatStatus());
+      break;
+    case "voice-leave":
     case "vc_leave":
-      teardownVc(from);
+      removeCallPeer(from);
       break;
     default:
       break;
@@ -430,54 +445,6 @@ export async function sendChat(text) {
   });
 }
 
-/* ---------- mic / WebRTC audio (+ optional video) ---------- */
-
-export async function setMic(on) {
-  micEnabled = !!on;
-  if (localStream) {
-    localStream.getAudioTracks().forEach((t) => {
-      t.enabled = micEnabled;
-    });
-  }
-  if (isChatConnected()) {
-    await sendEnc({ t: "mic_state", on: micEnabled }).catch(() => {});
-  }
-  if (micEnabled) startLevelLoop();
-  else stopLevelLoop();
-  refreshLocalTile();
-  onPresence(getChatStatus());
-  return micEnabled;
-}
-
-export function toggleMic() {
-  return setMic(!micEnabled);
-}
-
-export async function ensureMedia({ video = false } = {}) {
-  localVideo = !!video;
-  if (localStream) {
-    const hasVid = localStream.getVideoTracks().length > 0;
-    if (video === hasVid) return localStream;
-    localStream.getTracks().forEach((t) => t.stop());
-    localStream = null;
-  }
-  localStream = await navigator.mediaDevices.getUserMedia({
-    audio: true,
-    video: video
-      ? {
-          width: { max: 320, ideal: 320 },
-          height: { max: 240, ideal: 240 },
-          frameRate: { max: 15, ideal: 12 },
-        }
-      : false,
-  });
-  localStream.getAudioTracks().forEach((t) => {
-    t.enabled = micEnabled;
-  });
-  startLevelLoop();
-  refreshLocalTile();
-  return localStream;
-}
 
 function startLevelLoop() {
   stopLevelLoop();
@@ -497,10 +464,7 @@ function startLevelLoop() {
       const level = Math.min(1, sum / (data.length * 128));
       onVcLevel("local", level);
       setTileTalking("local", level > 0.12);
-      if (isChatConnected() && level > 0.02) {
-        sendEnc({ t: "vc_level", level: +level.toFixed(3) }).catch(() => {});
-      }
-    }, 120);
+    }, 200);
   } catch (_) {}
 }
 
@@ -514,116 +478,331 @@ function stopLevelLoop() {
   analyser = null;
 }
 
-async function createPc(peerId) {
-  if (vcPcs.has(peerId)) return vcPcs.get(peerId);
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+
+/* ---------- Voice/Video mesh (V0RT3X-style perfect negotiation) ---------- */
+
+const rtcConfig = {
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+};
+
+/** peerId -> { pc, name, polite, makingOffer, ignoreOffer, stream } */
+const callPeers = new Map();
+let inCall = false;
+
+export async function ensureMedia({ video = false } = {}) {
+  localVideo = !!video;
+  if (localStream) {
+    const hasVid = localStream.getVideoTracks().length > 0;
+    if (video === hasVid) {
+      localStream.getAudioTracks().forEach((t) => (t.enabled = micEnabled));
+      refreshLocalTile();
+      return localStream;
+    }
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+    video: video
+      ? {
+          width: { max: 320, ideal: 320 },
+          height: { max: 240, ideal: 240 },
+          frameRate: { max: 15, ideal: 12 },
+        }
+      : false,
   });
+  localStream.getAudioTracks().forEach((t) => {
+    t.enabled = micEnabled;
+  });
+  startLevelLoop();
+  refreshLocalTile();
+  return localStream;
+}
+
+function ensurePeer(id, name, initiator) {
+  if (!id || id === myId || callPeers.has(id) || !inCall || !localStream) return;
+  const pc = new RTCPeerConnection(rtcConfig);
+  const polite = String(myId) < String(id);
+  const entry = {
+    pc,
+    name: name || peers.get(id)?.user || id,
+    polite,
+    makingOffer: false,
+    ignoreOffer: false,
+    stream: null,
+  };
+  callPeers.set(id, entry);
+  ensureTile(id, { name: entry.name, mode: "idle" });
+
+  localStream.getTracks().forEach((t) => {
+    try {
+      pc.addTrack(t, localStream);
+    } catch (_) {}
+  });
+
   pc.onicecandidate = (ev) => {
     if (ev.candidate) {
       sendEnc({
-        t: "vc_signal",
-        to: peerId,
+        t: "signal",
+        id: myId,
+        to: id,
+        u: db.getCurrentUser() || "anon",
         kind: "ice",
-        candidate: ev.candidate.toJSON(),
+        payload: ev.candidate,
       }).catch(() => {});
     }
   };
+
   pc.ontrack = (ev) => {
     const stream = ev.streams[0] || new MediaStream([ev.track]);
-    const name = peers.get(peerId)?.user || peerId;
-    const hasVideo = stream.getVideoTracks().length > 0 && stream.getVideoTracks().some((t) => t.readyState === "live");
-    // keep hidden audio element for audio-only playback reliability
-    let audioEl = document.getElementById("n3xn-chat-av-" + peerId);
-    if (!audioEl) {
-      audioEl = document.createElement("audio");
-      audioEl.id = "n3xn-chat-av-" + peerId;
-      audioEl.autoplay = true;
-      audioEl.style.display = "none";
-      document.body.appendChild(audioEl);
+    entry.stream = stream;
+    let audio = document.getElementById("n3xn-chat-av-" + id);
+    if (!audio) {
+      audio = document.createElement("audio");
+      audio.id = "n3xn-chat-av-" + id;
+      audio.autoplay = true;
+      audio.playsInline = true;
+      document.body.appendChild(audio);
     }
-    audioEl.srcObject = stream;
-    ensureTile(peerId, {
-      name,
-      mode: hasVideo || ev.track.kind === "video" ? "video" : "audio",
+    audio.srcObject = stream;
+    audio.play().catch(() => {});
+    const hasVid = stream.getVideoTracks().some((t) => t.readyState === "live");
+    ensureTile(id, {
+      name: entry.name,
+      mode: hasVid || ev.track.kind === "video" ? "video" : "audio",
       stream,
-      self: false,
     });
   };
-  const stream = await ensureMedia({ video: localVideo });
-  stream.getTracks().forEach((tr) => pc.addTrack(tr, stream));
-  vcPcs.set(peerId, pc);
-  return pc;
+
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed") removeCallPeer(id);
+  };
+
+  pc.onnegotiationneeded = async () => {
+    try {
+      entry.makingOffer = true;
+      await pc.setLocalDescription(await pc.createOffer());
+      await sendEnc({
+        t: "signal",
+        id: myId,
+        to: id,
+        u: db.getCurrentUser() || "anon",
+        kind: "offer",
+        payload: pc.localDescription,
+      });
+    } catch (e) {
+      console.warn("nego", e);
+    } finally {
+      entry.makingOffer = false;
+    }
+  };
+
+  if (initiator) {
+    pc.createOffer()
+      .then((o) => pc.setLocalDescription(o))
+      .then(() =>
+        sendEnc({
+          t: "signal",
+          id: myId,
+          to: id,
+          u: db.getCurrentUser() || "anon",
+          kind: "offer",
+          payload: pc.localDescription,
+        })
+      )
+      .catch(console.error);
+  }
+}
+
+async function handleSignal(data) {
+  if (!inCall || !localStream) return;
+  const from = data.id || data.from;
+  if (!from || from === myId) return;
+  if (data.to && myId && data.to !== myId) return;
+  if (!callPeers.has(from)) ensurePeer(from, data.u || data.user || "?", false);
+  const entry = callPeers.get(from);
+  if (!entry) return;
+  const pc = entry.pc;
+  try {
+    if (data.kind === "offer") {
+      const offerCollision = entry.makingOffer || pc.signalingState !== "stable";
+      entry.ignoreOffer = !entry.polite && offerCollision;
+      if (entry.ignoreOffer) return;
+      await pc.setRemoteDescription(data.payload);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await sendEnc({
+        t: "signal",
+        id: myId,
+        to: from,
+        u: db.getCurrentUser() || "anon",
+        kind: "answer",
+        payload: pc.localDescription,
+      });
+    } else if (data.kind === "answer") {
+      await pc.setRemoteDescription(data.payload);
+    } else if (data.kind === "ice" && data.payload) {
+      try {
+        await pc.addIceCandidate(data.payload);
+      } catch (e) {
+        if (!entry.ignoreOffer) console.warn(e);
+      }
+    }
+  } catch (e) {
+    console.warn("signal", e);
+  }
+}
+
+function removeCallPeer(id) {
+  const entry = callPeers.get(id);
+  if (!entry) return;
+  try {
+    entry.pc.close();
+  } catch (_) {}
+  callPeers.delete(id);
+  removeTile(id);
+  document.getElementById("n3xn-chat-av-" + id)?.remove();
+}
+
+/** Join call mesh — voice by default; camera if already enabled */
+export async function joinVcMesh() {
+  if (inCall) {
+    onLog("Already in call", "out");
+    return;
+  }
+  if (!isChatConnected()) throw new Error("Join a chat room first");
+  await ensureMedia({ video: localVideo });
+  inCall = true;
+  refreshLocalTile();
+  // announce so others connect to us
+  await sendEnc({
+    t: "voice-join",
+    u: db.getCurrentUser() || "anon",
+    id: myId,
+    video: localVideo,
+  });
+  // connect to everyone already known
+  for (const [id, meta] of peers) {
+    if (id !== myId) ensurePeer(id, meta.user || id, true);
+  }
+  onLog("Joined call mesh", "ok");
+  onPresence(getChatStatus());
 }
 
 export async function startVcWith(peerId) {
-  const pc = await createPc(peerId);
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  await sendEnc({ t: "vc_signal", to: peerId, kind: "offer", sdp: offer });
-}
-
-export async function joinVcMesh() {
-  await ensureMedia({ video: localVideo });
-  refreshLocalTile();
-  // show idle tiles for known peers until tracks arrive
-  for (const [id, meta] of peers) {
-    if (id === myId) continue;
-    ensureTile(id, { name: meta.user || id, mode: meta.mic ? "audio" : "idle" });
-  }
-  for (const id of peers.keys()) {
-    if (id !== myId) await startVcWith(id).catch(() => {});
-  }
-  onLog("Call mesh started — tiles update as streams arrive", "ok");
-}
-
-async function handleVcSignal(from, msg) {
-  if (msg.to && myId && msg.to !== myId) return;
-  const pc = await createPc(from);
-  try {
-    if (msg.kind === "offer" && msg.sdp) {
-      await pc.setRemoteDescription(msg.sdp);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await sendEnc({ t: "vc_signal", to: from, kind: "answer", sdp: answer });
-    } else if (msg.kind === "answer" && msg.sdp) {
-      await pc.setRemoteDescription(msg.sdp);
-    } else if (msg.kind === "ice" && msg.candidate) {
-      try {
-        await pc.addIceCandidate(msg.candidate);
-      } catch {}
-    }
-  } catch (e) {
-    onLog("VC signal: " + e.message, "err");
-  }
-}
-
-function teardownVc(peerId) {
-  const pc = vcPcs.get(peerId);
-  if (pc) {
-    try {
-      pc.close();
-    } catch {}
-    vcPcs.delete(peerId);
-  }
-  removeTile(peerId);
-}
-
-function teardownAllVc() {
-  for (const id of [...vcPcs.keys()]) teardownVc(id);
+  if (!inCall) await joinVcMesh();
+  ensurePeer(peerId, peers.get(peerId)?.user || peerId, true);
 }
 
 export async function setVideo(on) {
-  localVideo = !!on;
+  const want = !!on;
+  if (want === localVideo && localStream) {
+    refreshLocalTile();
+    return;
+  }
+  localVideo = want;
+  // restart media with/without cam, renegotiate via negotiationneeded
   if (localStream) {
     localStream.getTracks().forEach((t) => t.stop());
     localStream = null;
   }
-  if (on || micEnabled) await ensureMedia({ video: localVideo });
-  refreshLocalTile();
-  for (const id of peers.keys()) {
-    if (id !== myId) await startVcWith(id).catch(() => {});
+  if (inCall || want) {
+    await ensureMedia({ video: localVideo });
+    // replace tracks on existing PCs
+    for (const [id, entry] of callPeers) {
+      const senders = entry.pc.getSenders();
+      for (const track of localStream.getTracks()) {
+        const sender = senders.find((s) => s.track && s.track.kind === track.kind);
+        if (sender) {
+          try {
+            await sender.replaceTrack(track);
+          } catch (_) {
+            try {
+              entry.pc.addTrack(track, localStream);
+            } catch (__) {}
+          }
+        } else {
+          try {
+            entry.pc.addTrack(track, localStream);
+          } catch (_) {}
+        }
+      }
+    }
   }
+  refreshLocalTile();
+  if (inCall) {
+    await sendEnc({
+      t: "voice-join",
+      u: db.getCurrentUser() || "anon",
+      id: myId,
+      video: localVideo,
+    }).catch(() => {});
+  }
+}
+
+export async function setMic(on) {
+  micEnabled = !!on;
+  if (localStream) {
+    localStream.getAudioTracks().forEach((t) => {
+      t.enabled = micEnabled;
+    });
+  }
+  if (isChatConnected()) {
+    await sendEnc({ t: "mic_state", on: micEnabled }).catch(() => {});
+  }
+  if (micEnabled && localStream) startLevelLoop();
+  else stopLevelLoop();
+  refreshLocalTile();
+  onPresence(getChatStatus());
+  return micEnabled;
+}
+
+export function toggleMic() {
+  return setMic(!micEnabled);
+}
+
+export async function leaveCall() {
+  inCall = false;
+  for (const id of [...callPeers.keys()]) removeCallPeer(id);
+  if (isChatConnected()) {
+    await sendEnc({ t: "voice-leave", id: myId }).catch(() => {});
+  }
+  if (localStream) {
+    localStream.getTracks().forEach((t) => t.stop());
+    localStream = null;
+  }
+  stopLevelLoop();
+  removeTile("local");
+  onLog("Left call", "ok");
+  onPresence(getChatStatus());
+}
+
+// backward-compat aliases used by app/terminal
+export async function vcLeave() {
+  return leaveCall();
+}
+
+function teardownVc(peerId) {
+  removeCallPeer(peerId);
+}
+
+function teardownAllVc() {
+  inCall = false;
+  for (const id of [...callPeers.keys()]) removeCallPeer(id);
+}
+
+async function handleVcSignal(from, msg) {
+  // legacy wrapper
+  await handleSignal({
+    ...msg,
+    id: from,
+    from,
+    payload: msg.payload || msg.sdp || msg.candidate,
+  });
 }
 
 
@@ -633,8 +812,7 @@ export function setSidebarCollapsed(collapsed) {
   localStream.getVideoTracks().forEach((t) => {
     t.enabled = !collapsed && localVideo;
   });
-  // pause remote videos
-  document.querySelectorAll(".n3xn-chat-remote-video").forEach((v) => {
+  document.querySelectorAll(".n3xn-chat-remote-video, .chat-tile video").forEach((v) => {
     try {
       if (collapsed) v.pause();
       else v.play().catch(() => {});
