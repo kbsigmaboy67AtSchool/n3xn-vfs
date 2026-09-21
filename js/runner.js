@@ -141,6 +141,11 @@ export function detectRunner(path) {
   if (e === "n3-site") return "n3-site";
   if (e === "jsx" || e === "tsx") return "react";
   if (e === "nexc") return "nexc";
+  if (e === "lua") return "lua";
+  if (e === "c" || e === "h") return "c";
+  if (e === "cpp" || e === "cc" || e === "cxx" || e === "hpp") return "cpp";
+  if (e === "rs") return "rust";
+  if (e === "go") return "go";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -429,6 +434,17 @@ export async function runText(path) {
 
 
 
+
+export async function runLangFile(path) {
+  const lr = await import("./lang-runner.js");
+  termPrint("Lang project: " + path, "out");
+  const result = await lr.runLanguageFile(path, {
+    log: (m, c) => termPrint(m, c || "out"),
+  });
+  if (result?.url) termPrint(result.url, "ok");
+  return result;
+}
+
 /* ========== React / JSX (browser Babel) ========== */
 export async function runReactFile(path) {
   const rr = await import("./react-runner.js");
@@ -508,6 +524,12 @@ export async function run(path, mode) {
     case "jsx":
     case "tsx":
       return runReactFile(path);
+    case "lua":
+    case "c":
+    case "cpp":
+    case "rust":
+    case "go":
+      return runLangFile(path);
     case "nexc":
       return (async () => {
         const { print } = await import("./terminal.js").catch(() => ({ print: console.log }));
