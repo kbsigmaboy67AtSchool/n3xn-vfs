@@ -38,6 +38,19 @@ const remoteCursors = new Map();
 let cursorSendTimer = null;
 let lastSentCursor = null; // { path, line, column }
 let cursorHooked = false;
+/** @type {Map<string, object>} */
+const pendingVc = new Map(); // id -> request
+/** @type {Map<string, RTCPeerConnection>} */
+const vcPeers = new Map();
+let vcLocalStream = null;
+let vcMuted = false;
+/** @type {Array<object>} */
+const pmHistory = []; // last private messages for reply
+let lastPmId = null;
+const PM_MAX_IMAGES = 4;
+const PM_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
+const PM_MAX_TEXT = 12000;
+
 const CURSOR_PALETTE = [
   "#00f3ff", "#ff79c6", "#4ade80", "#fbbf24", "#a78bfa",
   "#fb7185", "#38bdf8", "#f472b6", "#34d399", "#facc15",
@@ -278,6 +291,27 @@ async function handleAppMessage(msg) {
       break;
     case "collab_cursor":
       handleRemoteCursor(from, msg);
+      break;
+    case "pmsg":
+      handlePmsg(from, msg);
+      break;
+    case "vc_request":
+    case "vc_invite":
+      handleVcRequest(from, msg);
+      break;
+    case "vc_accept":
+      await handleVcAccept(from, msg);
+      break;
+    case "vc_reject":
+      log(`[${from}] declined voice ${msg.id || ""}`, "out");
+      pendingVc.delete(msg.id);
+      break;
+    case "vc_signal":
+      await handleVcSignal(from, msg);
+      break;
+    case "vc_leave":
+      teardownVcPeer(from);
+      log(`[${from}] left voice`, "out");
       break;
     case "fs_pull_req":
       await respondPull(msg);
@@ -537,22 +571,22 @@ function ensureCursorCss() {
   background: color-mix(in srgb, var(--n3xn-rc, #00f3ff) 12%, transparent) !important;
 }
 .n3xn-remote-name {
-  pointer-events: none;
-  user-select: none;
+  pointer-events: none !important;
+  user-select: none !important;
   font-size: 10px;
-  line-height: 1.2;
+  line-height: 1.25;
   font-family: system-ui, sans-serif;
-  padding: 1px 5px;
+  padding: 2px 6px;
   border-radius: 3px;
   color: #0a0a0f;
   background: var(--n3xn-rc, #00f3ff);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.5);
   white-space: nowrap;
-  max-width: 96px;
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
-  transform: translateY(-100%);
   opacity: 0.95;
+  margin-bottom: 2px;
 }
 `;
   document.head.appendChild(style);
@@ -724,33 +758,49 @@ function renderRemoteCursor(peerId) {
     },
   ]);
 
-  // name badge content widget
+  // name badge — Monaco content widget anchored to model position
   if (!entry.widget) {
     const dom = document.createElement("div");
     dom.className = "n3xn-remote-name";
-    dom.style.setProperty("--n3xn-rc", entry.color);
     dom.style.background = entry.color;
     dom.textContent = entry.user;
-    entry.widget = {
-      domNode: dom,
+    const widget = {
+      allowEditorOverflow: true,
       getId: () => "n3xn-cursor-widget-" + peerId,
       getDomNode: () => dom,
-      getPosition: () => ({
-        position: { lineNumber: entry.line, column: entry.column },
-        preference: [
-          monaco.editor.ContentWidgetPositionPreference.ABOVE,
-          monaco.editor.ContentWidgetPositionPreference.BELOW,
-        ],
-      }),
+      getPosition: () => {
+        const cur = remoteCursors.get(peerId);
+        if (!cur) return null;
+        const p = clampPos(ed, cur.line, cur.column);
+        return {
+          position: { lineNumber: p.lineNumber, column: p.column },
+          preference: [
+            monaco.editor.ContentWidgetPositionPreference.ABOVE,
+            monaco.editor.ContentWidgetPositionPreference.BELOW,
+          ],
+        };
+      },
     };
-    ed.addContentWidget(entry.widget);
+    entry.widget = widget;
+    entry.domNode = dom;
+    ed.addContentWidget(widget);
   } else {
-    entry.widget.domNode.textContent = entry.user;
-    entry.widget.domNode.style.background = entry.color;
+    if (entry.domNode) {
+      entry.domNode.textContent = entry.user;
+      entry.domNode.style.background = entry.color;
+    } else if (entry.widget.getDomNode) {
+      const n = entry.widget.getDomNode();
+      n.textContent = entry.user;
+      n.style.background = entry.color;
+    }
     ed.layoutContentWidget(entry.widget);
   }
 
   remoteCursors.set(peerId, entry);
+  // Force layout after decoration update so badge tracks caret
+  try {
+    ed.layoutContentWidget(entry.widget);
+  } catch (_) {}
 }
 
 function unrenderRemoteCursor(peerId, entry) {
@@ -813,4 +863,441 @@ if (typeof window !== "undefined") {
 
 export async function ping() {
   await sendEnc({ t: "ping", ts: Date.now() });
+}
+
+
+
+/* ========== Collab v2: private messages + P2P voice ========== */
+
+function shortId(prefix) {
+  const a = new Uint8Array(3);
+  crypto.getRandomValues(a);
+  return (
+    prefix +
+    "-" +
+    [...a].map((b) => b.toString(16).padStart(2, "0")).join("").toUpperCase()
+  );
+}
+
+/** Parse "Alice, Bob & Charlie" — does not split inside quotes */
+export function parseRecipients(str) {
+  const s = String(str || "").trim();
+  if (!s) return [];
+  // split on , or & or && with optional spaces (outside quotes handled by simple strip)
+  return s
+    .split(/\s*(?:,|&|&&)\s*/)
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => x.replace(/^["']|["']$/g, ""));
+}
+
+function resolvePeerIds(names) {
+  const out = [];
+  const unknown = [];
+  for (const name of names) {
+    let found = null;
+    if (peers.has(name)) found = name;
+    else {
+      for (const [id, meta] of peers) {
+        if ((meta.user || "").toLowerCase() === name.toLowerCase() || id === name) {
+          found = id;
+          break;
+        }
+      }
+    }
+    if (found) out.push(found);
+    else unknown.push(name);
+  }
+  return { ids: [...new Set(out)], unknown };
+}
+
+/** Minimal Markdown → safe DOM (no raw HTML) */
+export function renderMarkdownSafe(md) {
+  const wrap = document.createElement("div");
+  wrap.className = "n3xn-md";
+  let text = String(md || "").slice(0, PM_MAX_TEXT);
+  // escape
+  const esc = (s) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // extract images first ![alt](url)
+  const parts = [];
+  const imgRe = /!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[a-zA-Z+]+;base64,[a-zA-Z0-9+/=]+)\)/g;
+  let last = 0;
+  let m;
+  while ((m = imgRe.exec(text))) {
+    parts.push({ type: "text", v: text.slice(last, m.index) });
+    parts.push({ type: "img", alt: m[1], src: m[2] });
+    last = m.index + m[0].length;
+  }
+  parts.push({ type: "text", v: text.slice(last) });
+
+  function inlineFormat(s) {
+    let h = esc(s);
+    h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    h = h.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
+    h = h.replace(
+      /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+      '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+    h = h.replace(/\n/g, "<br/>");
+    return h;
+  }
+
+  for (const p of parts) {
+    if (p.type === "text") {
+      const span = document.createElement("span");
+      span.innerHTML = inlineFormat(p.v);
+      wrap.appendChild(span);
+    } else if (p.type === "img") {
+      const img = document.createElement("img");
+      img.alt = p.alt || "image";
+      img.referrerPolicy = "no-referrer";
+      img.loading = "lazy";
+      img.className = "n3xn-pm-img";
+      img.style.cssText =
+        "max-width:min(280px,90%);max-height:180px;display:block;margin:4px 0;border-radius:4px;border:1px solid #333";
+      if (
+        p.src.startsWith("https://") ||
+        p.src.startsWith("http://") ||
+        p.src.startsWith("data:image/")
+      ) {
+        img.src = p.src;
+      } else {
+        img.alt = "blocked";
+      }
+      img.onerror = () => {
+        img.replaceWith(document.createTextNode("[image unavailable]"));
+      };
+      img.onclick = () => {
+        try {
+          window.open(img.src, "_blank", "noopener,noreferrer");
+        } catch (_) {}
+      };
+      wrap.appendChild(img);
+    }
+  }
+  return wrap;
+}
+
+function showPmInTerminal(entry, direction) {
+  const head = document.createElement("div");
+  head.className = "cmd";
+  head.textContent =
+    direction === "out"
+      ? `PM→ ${entry.toUsers.join(", ")} [${entry.id}]`
+      : `PM← ${entry.fromUser || entry.from} [${entry.id}]`;
+  const el = document.getElementById("terminal-output");
+  if (!el) {
+    log(head.textContent + " " + entry.text, "cmd");
+    return;
+  }
+  el.appendChild(head);
+  el.appendChild(renderMarkdownSafe(entry.text));
+  el.scrollTop = el.scrollHeight;
+}
+
+function handlePmsg(from, msg) {
+  if (!msg || !msg.id) return;
+  // only show if we are a recipient or sender mirror
+  const to = Array.isArray(msg.to) ? msg.to : [];
+  if (from !== myId && myId && !to.includes(myId) && !to.includes(db.getCurrentUser())) {
+    // also match by username on our peer id
+    const myUser = db.getCurrentUser();
+    if (!to.some((t) => t === myId || t === myUser)) return;
+  }
+  const entry = {
+    id: String(msg.id).slice(0, 16),
+    from,
+    fromUser: msg.user || peers.get(from)?.user || from,
+    to,
+    toUsers: msg.toUsers || to,
+    text: String(msg.text || "").slice(0, PM_MAX_TEXT),
+    replyTo: msg.replyTo || null,
+    ts: msg.ts || Date.now(),
+  };
+  pmHistory.push(entry);
+  if (pmHistory.length > 100) pmHistory.shift();
+  lastPmId = entry.id;
+  showPmInTerminal(entry, "in");
+}
+
+export async function sendPmsg(recipientStr, text, { replyTo = null, images = [] } = {}) {
+  if (!isConnected()) throw new Error("Not connected");
+  const names = parseRecipients(recipientStr);
+  if (!names.length) throw new Error("No recipients");
+  const { ids, unknown } = resolvePeerIds(names);
+  if (unknown.length) throw new Error("Unknown collaborator: " + unknown.join(", "));
+  if (!ids.length) throw new Error("No valid recipients in room");
+
+  let body = String(text || "");
+  if (images.length > PM_MAX_IMAGES) throw new Error("Too many images. Maximum is 4 per message.");
+  for (const img of images) {
+    if (img.size > PM_MAX_IMAGE_BYTES) throw new Error("Image exceeds the maximum allowed size (3 MB).");
+    if (!String(img.mime || "").startsWith("image/")) throw new Error("Invalid image MIME type.");
+    // data URL already compressed by caller
+    body += `\n![attach](${img.dataUrl})`;
+  }
+  if (body.length > PM_MAX_TEXT + PM_MAX_IMAGES * 100) {
+    // data urls can be large — check total payload soft limit ~2.5MB encoded later
+  }
+  const id = shortId("PM");
+  const toUsers = names;
+  const payload = {
+    t: "pmsg",
+    id,
+    to: ids,
+    toUsers,
+    user: db.getCurrentUser() || "anon",
+    text: body.slice(0, 500000), // hard cap
+    replyTo,
+  };
+  // size guard
+  const approx = JSON.stringify(payload).length;
+  if (approx > 2_500_000) throw new Error("Message exceeds the maximum allowed size.");
+
+  await sendEnc(payload);
+  const entry = {
+    id,
+    from: myId,
+    fromUser: db.getCurrentUser() || "anon",
+    to: ids,
+    toUsers,
+    text: body,
+    replyTo,
+    ts: Date.now(),
+  };
+  pmHistory.push(entry);
+  lastPmId = id;
+  showPmInTerminal(entry, "out");
+  return id;
+}
+
+export async function replyPmsg(text) {
+  const last = [...pmHistory].reverse().find((m) => m.from && m.from !== myId);
+  if (!last) throw new Error("No message to reply to");
+  log(`Replying to ${last.fromUser}: "${String(last.text).slice(0, 60)}"`, "out");
+  return sendPmsg(last.fromUser || last.from, text, { replyTo: last.id });
+}
+
+/** Compress image File to data URL under 3MB when possible */
+export async function fileToImageAttachment(file) {
+  if (!file || !file.type.startsWith("image/")) throw new Error("Invalid image MIME type.");
+  if (file.size > PM_MAX_IMAGE_BYTES * 2) throw new Error("Image exceeds the maximum allowed size (3 MB).");
+  const bitmap = await createImageBitmap(file);
+  const maxW = 1280;
+  const scale = Math.min(1, maxW / bitmap.width);
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  let quality = 0.82;
+  let dataUrl = canvas.toDataURL("image/jpeg", quality);
+  while (dataUrl.length > PM_MAX_IMAGE_BYTES * 1.37 && quality > 0.4) {
+    quality -= 0.1;
+    dataUrl = canvas.toDataURL("image/jpeg", quality);
+  }
+  if (dataUrl.length > PM_MAX_IMAGE_BYTES * 1.37) {
+    throw new Error("Image exceeds the maximum allowed size after compression.");
+  }
+  return { mime: "image/jpeg", dataUrl, size: Math.round(dataUrl.length * 0.75) };
+}
+
+/* ----- WebRTC voice (signaling over encrypted WSS only) ----- */
+
+function handleVcRequest(from, msg) {
+  const id = msg.id || shortId("VC");
+  pendingVc.set(id, {
+    id,
+    from,
+    fromUser: msg.user || peers.get(from)?.user || from,
+    message: msg.message || "",
+    ts: Date.now(),
+  });
+  log(
+    `${msg.user || from} invited you to voice chat.\nRequest ID: ${id}\nUse: wss vcaccept ${id}`,
+    "ok"
+  );
+}
+
+async function ensureMic() {
+  if (vcLocalStream) return vcLocalStream;
+  vcLocalStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+  if (vcMuted) vcLocalStream.getAudioTracks().forEach((t) => (t.enabled = false));
+  return vcLocalStream;
+}
+
+async function createPc(peerId) {
+  if (vcPeers.has(peerId)) return vcPeers.get(peerId);
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  });
+  pc.onicecandidate = (ev) => {
+    if (ev.candidate) {
+      sendEnc({
+        t: "vc_signal",
+        to: peerId,
+        kind: "ice",
+        candidate: ev.candidate.toJSON(),
+      }).catch(() => {});
+    }
+  };
+  pc.ontrack = (ev) => {
+    let audio = document.getElementById("n3xn-vc-audio-" + peerId);
+    if (!audio) {
+      audio = document.createElement("audio");
+      audio.id = "n3xn-vc-audio-" + peerId;
+      audio.autoplay = true;
+      audio.playsInline = true;
+      audio.style.display = "none";
+      document.body.appendChild(audio);
+    }
+    audio.srcObject = ev.streams[0];
+  };
+  pc.onconnectionstatechange = () => {
+    log(`Voice ${peerId}: ${pc.connectionState}`, "out");
+    if (["failed", "closed", "disconnected"].includes(pc.connectionState)) {
+      // soft
+    }
+  };
+  const stream = await ensureMic();
+  stream.getTracks().forEach((tr) => pc.addTrack(tr, stream));
+  vcPeers.set(peerId, pc);
+  return pc;
+}
+
+export async function vcRequest(recipientStr, message = "") {
+  if (!isConnected()) throw new Error("Not connected");
+  const names = parseRecipients(recipientStr);
+  const { ids, unknown } = resolvePeerIds(names);
+  if (unknown.length) throw new Error("Unknown collaborator: " + unknown.join(", "));
+  if (!ids.length) throw new Error("No recipients");
+  const id = shortId("VC");
+  await sendEnc({
+    t: "vc_invite",
+    id,
+    to: ids,
+    user: db.getCurrentUser() || "anon",
+    message: String(message || "").slice(0, 200),
+  });
+  log(`Voice request sent to ${names.join(", ")}\nRequest ID: ${id}`, "ok");
+  // prepare mic early
+  try {
+    await ensureMic();
+  } catch (e) {
+    log("Microphone: " + e.message, "err");
+  }
+  return id;
+}
+
+export async function vcAccept(id) {
+  if (!id) {
+    const latest = [...pendingVc.values()].sort((a, b) => b.ts - a.ts)[0];
+    if (!latest) throw new Error("No pending voice request found.");
+    id = latest.id;
+  }
+  const req = pendingVc.get(id);
+  if (!req) throw new Error("No pending voice request found.");
+  await sendEnc({
+    t: "vc_accept",
+    id,
+    to: req.from,
+    user: db.getCurrentUser() || "anon",
+  });
+  // we create offer after accept — wait for peer to also set up; initiator is acceptor here
+  const pc = await createPc(req.from);
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+  await sendEnc({
+    t: "vc_signal",
+    to: req.from,
+    kind: "offer",
+    sdp: offer,
+    id,
+  });
+  pendingVc.delete(id);
+  log(`Accepted voice ${id} with ${req.fromUser}`, "ok");
+}
+
+async function handleVcAccept(from, msg) {
+  log(`[${from}] accepted voice ${msg.id || ""}`, "ok");
+  // remote accepted our invite — wait for their offer or we offer
+  const pc = await createPc(from);
+  if (pc.signalingState === "stable") {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await sendEnc({ t: "vc_signal", to: from, kind: "offer", sdp: offer, id: msg.id });
+  }
+}
+
+async function handleVcSignal(from, msg) {
+  if (msg.to && myId && msg.to !== myId) return;
+  const pc = await createPc(from);
+  try {
+    if (msg.kind === "offer" && msg.sdp) {
+      await pc.setRemoteDescription(msg.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await sendEnc({ t: "vc_signal", to: from, kind: "answer", sdp: answer, id: msg.id });
+    } else if (msg.kind === "answer" && msg.sdp) {
+      await pc.setRemoteDescription(msg.sdp);
+    } else if (msg.kind === "ice" && msg.candidate) {
+      try {
+        await pc.addIceCandidate(msg.candidate);
+      } catch (_) {}
+    }
+  } catch (e) {
+    log("WebRTC signal error: " + e.message, "err");
+  }
+}
+
+function teardownVcPeer(peerId) {
+  const pc = vcPeers.get(peerId);
+  if (pc) {
+    try {
+      pc.close();
+    } catch (_) {}
+    vcPeers.delete(peerId);
+  }
+  document.getElementById("n3xn-vc-audio-" + peerId)?.remove();
+}
+
+export function vcMute() {
+  vcMuted = true;
+  vcLocalStream?.getAudioTracks().forEach((t) => (t.enabled = false));
+  log("Voice muted", "ok");
+}
+export function vcUnmute() {
+  vcMuted = false;
+  vcLocalStream?.getAudioTracks().forEach((t) => (t.enabled = true));
+  log("Voice unmuted", "ok");
+}
+export async function vcLeave() {
+  for (const id of [...vcPeers.keys()]) {
+    try {
+      await sendEnc({ t: "vc_leave", to: id });
+    } catch (_) {}
+    teardownVcPeer(id);
+  }
+  if (vcLocalStream) {
+    vcLocalStream.getTracks().forEach((t) => t.stop());
+    vcLocalStream = null;
+  }
+  log("Left voice chat", "ok");
+}
+export function vcStatus() {
+  return {
+    muted: vcMuted,
+    peers: [...vcPeers.keys()],
+    pending: [...pendingVc.keys()],
+    mic: !!vcLocalStream,
+  };
+}
+
+export function listPeersNamed() {
+  return [...peers.entries()].map(([id, m]) => ({ id, user: m.user || id }));
 }
