@@ -41,6 +41,93 @@ let levelTimer = null;
 let localBus = null; // BroadcastChannel — same-browser / no-WSS local mode
 let localMode = false;
 
+/* ---------- Zoom-style participant tiles ---------- */
+
+function gridEl() {
+  return document.getElementById("chat-vc-videos");
+}
+
+function initials(name) {
+  const s = String(name || "?").trim();
+  const parts = s.split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return s.slice(0, 2).toUpperCase();
+}
+
+/**
+ * mode: 'video' | 'audio' | 'idle'
+ */
+export function ensureTile(peerId, { name, mode = "idle", stream = null, self = false } = {}) {
+  const grid = gridEl();
+  if (!grid) return null;
+  let tile = document.getElementById("chat-tile-" + peerId);
+  if (!tile) {
+    tile = document.createElement("div");
+    tile.id = "chat-tile-" + peerId;
+    tile.className = "chat-tile";
+    tile.innerHTML = `
+      <div class="chat-tile-avatar"></div>
+      <video playsinline autoplay></video>
+      <div class="chat-tile-name"></div>
+      <div class="chat-tile-badge"></div>`;
+    grid.appendChild(tile);
+  }
+  tile.classList.toggle("self", !!self);
+  const label = name || peers.get(peerId)?.user || peerId;
+  tile.querySelector(".chat-tile-name").textContent = self ? label + " (you)" : label;
+  tile.querySelector(".chat-tile-avatar").textContent = initials(label);
+
+  const video = tile.querySelector("video");
+  tile.classList.remove("audio-only", "idle");
+  if (mode === "video" && stream) {
+    video.srcObject = stream;
+    video.muted = !!self; // avoid feedback
+    video.style.display = "block";
+    tile.querySelector(".chat-tile-badge").textContent = "CAM";
+    video.play?.().catch(() => {});
+  } else if (mode === "audio") {
+    tile.classList.add("audio-only");
+    if (stream) {
+      video.srcObject = stream;
+      video.muted = true; // audio played via hidden element if needed
+    }
+    tile.querySelector(".chat-tile-badge").textContent = "🎤";
+  } else {
+    tile.classList.add("idle");
+    tile.querySelector(".chat-tile-badge").textContent = "";
+  }
+  return tile;
+}
+
+export function setTileTalking(peerId, on) {
+  document.getElementById("chat-tile-" + peerId)?.classList.toggle("talking", !!on);
+}
+
+export function removeTile(peerId) {
+  document.getElementById("chat-tile-" + peerId)?.remove();
+  document.getElementById("n3xn-chat-av-" + peerId)?.remove();
+}
+
+function refreshLocalTile() {
+  if (!localStream) {
+    ensureTile("local", {
+      name: (typeof db !== "undefined" && db.getCurrentUser?.()) || "you",
+      mode: "idle",
+      self: true,
+    });
+    return;
+  }
+  const hasVid = localStream.getVideoTracks().some((t) => t.enabled && t.readyState === "live");
+  const hasAud = localStream.getAudioTracks().some((t) => t.enabled && t.readyState === "live");
+  ensureTile("local", {
+    name: (typeof db !== "undefined" && db.getCurrentUser?.()) || "you",
+    mode: hasVid ? "video" : hasAud ? "audio" : "idle",
+    stream: localStream,
+    self: true,
+  });
+}
+
+
 
 export function setChatHandlers({ log, message, presence, vcLevel } = {}) {
   if (log) onLog = log;
@@ -274,6 +361,10 @@ async function handleMsg(msg) {
         mic: !!msg.mic,
         level: 0,
       });
+      ensureTile(from, {
+        name: msg.user || from,
+        mode: msg.mic ? "audio" : "idle",
+      });
       onPresence(getChatStatus());
       break;
     case "bye":
@@ -304,6 +395,7 @@ async function handleMsg(msg) {
         p.level = Math.min(1, Math.max(0, Number(msg.level) || 0));
         peers.set(from, p);
         onVcLevel(from, p.level);
+        setTileTalking(from, p.level > 0.12);
         onPresence(getChatStatus());
       }
       break;
@@ -352,6 +444,7 @@ export async function setMic(on) {
   }
   if (micEnabled) startLevelLoop();
   else stopLevelLoop();
+  refreshLocalTile();
   onPresence(getChatStatus());
   return micEnabled;
 }
@@ -382,6 +475,7 @@ export async function ensureMedia({ video = false } = {}) {
     t.enabled = micEnabled;
   });
   startLevelLoop();
+  refreshLocalTile();
   return localStream;
 }
 
@@ -402,6 +496,7 @@ function startLevelLoop() {
       for (let i = 0; i < data.length; i++) sum += data[i];
       const level = Math.min(1, sum / (data.length * 128));
       onVcLevel("local", level);
+      setTileTalking("local", level > 0.12);
       if (isChatConnected() && level > 0.02) {
         sendEnc({ t: "vc_level", level: +level.toFixed(3) }).catch(() => {});
       }
@@ -435,21 +530,25 @@ async function createPc(peerId) {
     }
   };
   pc.ontrack = (ev) => {
-    let el = document.getElementById("n3xn-chat-av-" + peerId);
-    if (!el) {
-      el = document.createElement(ev.track.kind === "video" ? "video" : "audio");
-      el.id = "n3xn-chat-av-" + peerId;
-      el.autoplay = true;
-      el.playsInline = true;
-      if (el.tagName === "AUDIO") el.style.display = "none";
-      else {
-        el.muted = false;
-        el.className = "n3xn-chat-remote-video";
-        document.getElementById("chat-vc-videos")?.appendChild(el);
-      }
-      if (el.tagName === "AUDIO") document.body.appendChild(el);
+    const stream = ev.streams[0] || new MediaStream([ev.track]);
+    const name = peers.get(peerId)?.user || peerId;
+    const hasVideo = stream.getVideoTracks().length > 0 && stream.getVideoTracks().some((t) => t.readyState === "live");
+    // keep hidden audio element for audio-only playback reliability
+    let audioEl = document.getElementById("n3xn-chat-av-" + peerId);
+    if (!audioEl) {
+      audioEl = document.createElement("audio");
+      audioEl.id = "n3xn-chat-av-" + peerId;
+      audioEl.autoplay = true;
+      audioEl.style.display = "none";
+      document.body.appendChild(audioEl);
     }
-    el.srcObject = ev.streams[0];
+    audioEl.srcObject = stream;
+    ensureTile(peerId, {
+      name,
+      mode: hasVideo || ev.track.kind === "video" ? "video" : "audio",
+      stream,
+      self: false,
+    });
   };
   const stream = await ensureMedia({ video: localVideo });
   stream.getTracks().forEach((tr) => pc.addTrack(tr, stream));
@@ -466,10 +565,16 @@ export async function startVcWith(peerId) {
 
 export async function joinVcMesh() {
   await ensureMedia({ video: localVideo });
+  refreshLocalTile();
+  // show idle tiles for known peers until tracks arrive
+  for (const [id, meta] of peers) {
+    if (id === myId) continue;
+    ensureTile(id, { name: meta.user || id, mode: meta.mic ? "audio" : "idle" });
+  }
   for (const id of peers.keys()) {
     if (id !== myId) await startVcWith(id).catch(() => {});
   }
-  onLog("VC mesh offer sent to peers", "ok");
+  onLog("Call mesh started — tiles update as streams arrive", "ok");
 }
 
 async function handleVcSignal(from, msg) {
@@ -501,7 +606,7 @@ function teardownVc(peerId) {
     } catch {}
     vcPcs.delete(peerId);
   }
-  document.getElementById("n3xn-chat-av-" + peerId)?.remove();
+  removeTile(peerId);
 }
 
 function teardownAllVc() {
@@ -515,9 +620,9 @@ export async function setVideo(on) {
     localStream = null;
   }
   if (on || micEnabled) await ensureMedia({ video: localVideo });
-  // renegotiate simply by re-offering
+  refreshLocalTile();
   for (const id of peers.keys()) {
-    await startVcWith(id).catch(() => {});
+    if (id !== myId) await startVcWith(id).catch(() => {});
   }
 }
 
