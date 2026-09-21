@@ -1075,7 +1075,7 @@ function showHelp(args) {
   }
 }
 
-async function loadCustomCommandsasync function loadCustomCommands() {
+async function loadCustomCommands() {
   try {
     const raw = await db.getMeta("custom_commands");
     if (raw) customCommands = raw;
