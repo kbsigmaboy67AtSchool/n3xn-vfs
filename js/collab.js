@@ -91,6 +91,11 @@ export function listSharedFiles() {
   return [...sharedFiles.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
 
+export function readSharedContent(keyOrPath) {
+  const f = getSharedFile(keyOrPath);
+  return f?.content || null;
+}
+
 export function getSharedFile(keyOrPath) {
   if (sharedFiles.has(keyOrPath)) return sharedFiles.get(keyOrPath);
   for (const v of sharedFiles.values()) {
@@ -103,6 +108,36 @@ function collabKey(from, path) {
   const p = path.startsWith("/") ? path : "/" + path;
   return `/collab/${from}${p}`;
 }
+
+const COLLAB_IDB_PREFIX = "/.n3xn-collab";
+
+function idbCollabPath(key) {
+  return COLLAB_IDB_PREFIX + key;
+}
+
+async function persistSharedToIdb(entry) {
+  if (!entry?.key || !entry.content) return;
+  try {
+    await fs.writeFile(idbCollabPath(entry.key), entry.content, {
+      mime: entry.mime || "application/octet-stream",
+      sync_status: entry.status || "ready",
+      file_id: entry.id || entry.key,
+      collab: true,
+      collab_from: entry.from,
+      last_modified: entry.updated || Date.now(),
+    });
+  } catch (e) {
+    /* not logged in or IDB busy */
+  }
+}
+
+async function removeSharedFromIdb(key) {
+  try {
+    const p = idbCollabPath(key);
+    if (fs.exists(p)) await fs.remove(p);
+  } catch (_) {}
+}
+
 
 
 export function isConnected() {
@@ -376,6 +411,12 @@ async function handleAppMessage(msg) {
     case "collab_edit":
       await applyRemoteEdit(msg);
       break;
+    case "collab_snapshot_req":
+      await sendCollabSnapshot(from, msg.path);
+      break;
+    case "collab_snapshot":
+      await applyCollabSnapshot(from, msg);
+      break;
     case "collab_cursor":
       handleRemoteCursor(from, msg);
       break;
@@ -421,7 +462,6 @@ async function assembleTransfer(id) {
   const tr = transfers.get(id);
   if (!tr) return;
   try {
-    // ensure all chunks present
     for (let i = 0; i < tr.total; i++) {
       if (tr.parts[i] == null) {
         log(`Share ${id}: missing chunk ${i}/${tr.total}`, "err");
@@ -433,39 +473,22 @@ async function assembleTransfer(id) {
     const orig = tr.path.startsWith("/") ? tr.path : "/" + tr.path;
     const from = tr.from || "peer";
     const key = collabKey(from, orig);
-    // Mirror under /collab/<peerId>/...
-    const dest = key;
-    const parts = dest.split("/").filter(Boolean);
-    parts.pop();
-    let cur = "";
-    for (const p of parts) {
-      cur += "/" + p;
-      if (!fs.exists(cur)) {
-        try {
-          await fs.mkdir(cur, { parents: true });
-        } catch {
-          try {
-            await fs.mkdir(cur);
-          } catch {}
-        }
-      }
-    }
-    await fs.writeFile(dest, bytes, { mime: tr.mime || "application/octet-stream" });
     sharedFiles.set(key, {
       key,
       path: orig,
       from,
       fromUser: peers.get(from)?.user || from,
-      mime: tr.mime,
+      mime: tr.mime || "application/octet-stream",
       size: bytes.length,
       status: "ready",
       id: tr.id || id,
+      content: bytes,
       updated: Date.now(),
     });
     log(`Collab FS ← ${key} (${bytes.length}b)`, "ok");
     transfers.delete(id);
+    await persistSharedToIdb(sharedFiles.get(key));
     notifyCollabFs();
-    if (window.refreshTree) window.refreshTree();
   } catch (e) {
     log(`Assemble failed: ${e.message}`, "err");
   }
@@ -504,8 +527,20 @@ async function applyRemoteEdit(msg) {
       if (pos) ed.setPosition(pos);
     }
     collabDoc.version = msg.v || (collabDoc.version || 0) + 1;
-    // Persist
-    await fs.writeFile(msg.path, msg.content);
+    // Persist local VFS + any Collab FS cache for this path
+    const persistJobs = [fs.writeFile(msg.path, msg.content, { mime: "text/plain", sync_status: "synced" })];
+    for (const [k, ent] of sharedFiles) {
+      if (ent.path === msg.path) {
+        const bytes = new TextEncoder().encode(msg.content);
+        ent.content = bytes;
+        ent.size = bytes.length;
+        ent.updated = Date.now();
+        ent.status = "ready";
+        persistJobs.push(persistSharedToIdb(ent));
+      }
+    }
+    await Promise.all(persistJobs);
+    notifyCollabFs();
   } finally {
     collabDoc.applying = false;
   }
@@ -589,7 +624,7 @@ export async function shareFile(path) {
   // local catalog entry (our own share visible in Collab FS)
   if (myId) {
     const key = collabKey(myId, path);
-    sharedFiles.set(key, {
+    const entry = {
       key,
       path,
       from: myId,
@@ -598,13 +633,11 @@ export async function shareFile(path) {
       size: f.content.length,
       status: "ready",
       id,
+      content: f.content,
       updated: Date.now(),
-    });
-    // also mirror under /collab for consistency
-    try {
-      await ensureCollabPath(key);
-      await fs.writeFile(key, f.content, { mime: f.mime });
-    } catch (_) {}
+    };
+    sharedFiles.set(key, entry);
+    await persistSharedToIdb(entry);
   }
   myShares.set(path, { id, mime: f.mime, size: f.content.length });
   await sendEnc({
@@ -651,9 +684,7 @@ export async function unshareFile(path) {
   if (myId) {
     const key = collabKey(myId, path);
     sharedFiles.delete(key);
-    try {
-      if (fs.exists(key)) await fs.remove(key);
-    } catch {}
+    await removeSharedFromIdb(key);
   }
   await sendEnc({ t: "share_revoke", path, id: meta?.id });
   notifyCollabFs();
@@ -701,15 +732,9 @@ export function openCollabFs() {
 
 function removeSharesFromPeer(peerId) {
   for (const [k, v] of [...sharedFiles.entries()]) {
-    if (v.from === peerId) {
-      sharedFiles.delete(k);
-      try {
-        if (fs.exists(k)) fs.remove(k);
-      } catch {}
-    }
+    if (v.from === peerId) sharedFiles.delete(k);
   }
   notifyCollabFs();
-  if (window.refreshTree) window.refreshTree();
 }
 
 export async function announceMyShares() {
@@ -731,6 +756,75 @@ export async function pullFile(path) {
   log(`Requested ${path} from room`, "out");
 }
 
+async function sendCollabSnapshot(to, path) {
+  if (!path) return;
+  try {
+    const f = await fs.readFile(path);
+    if (!f) return;
+    // size guard
+    if (f.content.length > 400000) {
+      await sendEnc({ t: "collab_snapshot", to, path, error: "too large", from_host: myId });
+      return;
+    }
+    const text = f.text ? f.text() : new TextDecoder().decode(f.content);
+    await sendEnc({
+      t: "collab_snapshot",
+      to,
+      path,
+      content: text,
+      mime: f.mime,
+      v: collabDoc?.path === path ? collabDoc.version : 0,
+      from_host: myId,
+    });
+  } catch (e) {
+    log("snapshot send: " + e.message, "err");
+  }
+}
+
+async function applyCollabSnapshot(from, msg) {
+  if (msg.to && myId && msg.to !== myId) return;
+  if (msg.error) {
+    log(`Snapshot from ${from}: ${msg.error}`, "err");
+    return;
+  }
+  if (!msg.path || msg.content == null) return;
+  try {
+    await fs.writeFile(msg.path, msg.content, {
+      mime: msg.mime || "text/plain",
+      sync_status: "snapshot",
+      last_modified: Date.now(),
+    });
+    const key = collabKey(from, msg.path);
+    const bytes = new TextEncoder().encode(msg.content);
+    sharedFiles.set(key, {
+      key,
+      path: msg.path,
+      from,
+      fromUser: peers.get(from)?.user || from,
+      mime: msg.mime,
+      size: bytes.length,
+      status: "ready",
+      content: bytes,
+      updated: Date.now(),
+    });
+    await persistSharedToIdb(sharedFiles.get(key));
+    if (window.__n3xnActivePath === msg.path && window.__n3xnEditor) {
+      const ed = window.__n3xnEditor;
+      const applying = collabDoc?.applying;
+      if (collabDoc) collabDoc.applying = true;
+      try {
+        if (ed.getValue() !== msg.content) ed.setValue(msg.content);
+      } finally {
+        if (collabDoc) collabDoc.applying = !!applying;
+      }
+    }
+    notifyCollabFs();
+    log(`Snapshot applied ${msg.path} from ${from}`, "ok");
+  } catch (e) {
+    log("snapshot apply: " + e.message, "err");
+  }
+}
+
 /** Join collab session on a text file; broadcasts edits */
 export async function collabJoin(path) {
   path = path.startsWith("/") ? path : "/" + path;
@@ -748,6 +842,8 @@ export async function collabJoin(path) {
   hookCursor();
   sendLocalCursor(true);
   refreshRemoteCursorsForActiveModel();
+  // request host snapshot of this file from peers
+  sendEnc({ t: "collab_snapshot_req", path }).catch(() => {});
 }
 
 export function collabLeave() {
