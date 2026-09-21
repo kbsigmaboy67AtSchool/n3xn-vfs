@@ -827,7 +827,8 @@ async function cmdWss(args) {
     print("  wss connect <wss-url> [roomPassword]");
     print("  wss disconnect | status | chat <msg> | share|unshare <path> | pull <path>");
     print("  wss collabfs | cfs | shares  — open Collab FS of live shared files");
-    print("  wss collab [path] | leave | ping");
+    print("  wss collab <path>  — same as share (Collab FS)");
+    print("  wss leave | ping");
     print("  wss pmsg <recipients> <markdown…>   — private message (Alice,Bob & Charlie)");
     print("  wss pmsgimg <recipients> <markdown> — pick up to 4 images then send");
     print("  wss reply|.r <markdown…>            — reply to last incoming PM");
@@ -894,10 +895,15 @@ async function cmdWss(args) {
   }
 
   if (sub === "collab" || sub === "join") {
+    // Same as share → Collab FS; also join live edit/cursors on that path
     const path = resolve(args[1] || window.__n3xnActivePath);
-    if (!path) throw new Error("Usage: wss collab <text-file-path>");
-    await collab.collabJoin(path);
-    print("Edits sync ~350ms after typing while this file is active", "ok");
+    if (!path) throw new Error("Usage: wss collab <path>  (same as share + live cursors)");
+    await collab.shareFile(path);
+    try {
+      await collab.collabJoin(path);
+    } catch (_) {}
+    print("Collab FS + live session: " + path, "ok");
+    collab.openCollabFs();
     return;
   }
 
