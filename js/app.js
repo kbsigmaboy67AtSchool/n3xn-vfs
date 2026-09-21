@@ -964,7 +964,23 @@ const _bootApp = typeof bootApp === "function" ? bootApp : null;
 /* ========== Chat sidebar (public rooms) ========== */
 (function initChatSidebar() {
   const side = document.getElementById("chat-sidebar");
-  if (!side) return;
+  if (!side) {
+    console.warn("[n3xn] chat-sidebar element missing from DOM");
+    return;
+  }
+  document.querySelectorAll(".open-chat-btn, #btn-chat-toggle").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      if (btn.id === "btn-chat-toggle") {
+        side.classList.toggle("collapsed");
+      } else {
+        side.classList.remove("collapsed");
+      }
+      side.style.display = "flex";
+      const collapsed = side.classList.contains("collapsed");
+      import("./chat.js").then((c) => c.setSidebarCollapsed?.(collapsed)).catch(() => {});
+    });
+  });
+
   const msgs = document.getElementById("chat-messages");
   const peersEl = document.getElementById("chat-peers");
   const micBtn = document.getElementById("btn-mic");
@@ -1014,11 +1030,7 @@ const _bootApp = typeof bootApp === "function" ? bootApp : null;
     }
   }
 
-  document.getElementById("btn-chat-toggle")?.addEventListener("click", () => {
-    side.classList.toggle("collapsed");
-    const collapsed = side.classList.contains("collapsed");
-    import("./chat.js").then((c) => c.setSidebarCollapsed?.(collapsed)).catch(() => {});
-  });
+  // toggle handled via .open-chat-btn / #btn-chat-toggle above
 
   // offer file-bound room when a collab path is active
   const roomSel = document.getElementById("chat-room-select");
