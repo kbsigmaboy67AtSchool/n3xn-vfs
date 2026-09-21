@@ -166,7 +166,7 @@ async function run(line) {
 
     switch (cmd) {
       case "help":
-        showHelp();
+        showHelp(args);
         break;
       case "clear":
       case "cls":
@@ -372,6 +372,9 @@ async function run(line) {
         break;
       case "xdebug":
         await cmdXdebug(args);
+        break;
+      case "lang":
+        await cmdLang(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -1001,37 +1004,78 @@ async function cmdLogs(args) {
   }
 }
 
-function showHelp() {
-  const lines = [
-    "Built-in commands:",
-    "  help, clear, pwd, cd, ls [-l], cat [-n], mkdir [-p], touch, rm [-r],",
-    "  mv, cp, find <pattern>, grep [-ri] <pat> [path], head/tail/wc/du/file,",
-    "  basename, dirname, which, sort, uniq, history, alias, unalias,",
-    "  append|prepend|replace|insert|delline|undo|redo|diff,",
-    "  project stats|tree|info, debug <file>, web run, terminal fullscreen,",
-    "  find <pattern>, echo, whoami, stat, tree,",
-    "  export [fs|path], patch <pat> <search> <replace> [--dry],",
-    "  run [mode] <file>  — html|html-window|js|image|markdown|json|css|text|blob-open",
-    "  blob make|list|open|watch|clear <file|idx>",
-    "  webfile get|sync|headers|put   — fetch/sync URLs into VFS",
-    "  wss connect|chat|share|pull|collab|status|disconnect",
-    "  python <file.py> | python -c <code> | python canvas",
-    "  gh help|auth|repos|use|pull-tree|commit|pr|issues|storage …",
-    "  n3link <path> | n3site run|expand|list|help",
-    "  storage list|use|info|ls|cat|put|rm|meta",
-    "  perf | performance   — memory, quota, device",
-    "  nexc list|run|remote <file.nexc> [module]",
-    "  xdebug <path> [--live] | tryfix | last | open | copy | fix",
-    "  logs on|off|copy|clear  — mirror browser console to terminal",
-    "  cmd list|add|rm   — manage custom commands",
-    "",
-    "WSS is E2E encrypted (room password). Relay is opaque broadcast.",
-    "VFS files stay encrypted at rest. Local + optional collab room.",
+function showHelp(args) {
+  const HELP_PAGES = [
+    [
+      "n3xn help — page 1/3 (core FS)",
+      "  help [page|command…]     paginated or per-command help",
+      "  clear, pwd, cd, ls [-l], cat [-n], mkdir [-p], touch,",
+      "  rm [-r], mv, cp, find, grep [-ril] [-C n], head, tail, wc,",
+      "  du, file, basename, dirname, which, sort, uniq,",
+      "  history, alias, unalias, tree, stat, echo, whoami",
+    ],
+    [
+      "n3xn help — page 2/3 (edit / run / project)",
+      "  append|prepend|replace|insert|delline|undo|redo|diff",
+      "  patch, export, project stats|tree|files",
+      "  run [mode] <file> | web run | blob | webfile",
+      "  python | react | n3site | nexc | debug | xdebug [--live]",
+      "  lang lua|c|cpp|rust|go <entry>   multifile + //!n3xn config",
+      "  storage | perf | terminal fullscreen",
+    ],
+    [
+      "n3xn help — page 3/3 (collab / WSS)",
+      "  wss connect|disconnect|status|chat|share|pull|collab",
+      "  wss pmsg|pmsgimg|reply|.r | vcreq|vcaccept|vcmute|vcleave",
+      "  gh …  | logs on|off|copy",
+      "  In-file config: //!n3xn display=terminal run=main.lua files=a.lua,b.lua",
+      "  Compiled langs: place sibling .wasm to execute in-browser",
+    ],
   ];
-  lines.forEach((l) => print(l));
+
+  const CMD_HELP = {
+    grep: ["grep [-ril] [-C n] <pattern> [path]", "  Recursive content search in VFS"],
+    xdebug: ["xdebug <path> [--live] | tryfix | last | open | copy | fix", "  Advanced non-AI diagnostics"],
+    nexc: ["nexc list|run|remote <file.nexc> [module]", "  Package modules, parallel, wait, permissions"],
+    storage: ["storage list|use|info|ls|cat|put|rm|meta", "  IDB/OPFS/cache/memory backends"],
+    wss: ["wss help — collab, pmsg, voice, share (encrypted)"],
+    lang: [
+      "lang lua <entry.lua>     — Wasmoon WASM Lua, multifile",
+      "lang c|cpp|rust|go <entry> — project scan + optional .wasm run",
+      "  //!n3xn display=terminal|preview files=a.c,b.c cwd=/src",
+    ],
+    run: ["run [mode] <file>", "  modes: html, js, image, markdown, json, css, react, lua, …"],
+    help: ["help [page number | command name…]", "  Examples: help 2 | help grep xdebug lang"],
+  };
+
+  const a = args || [];
+  if (!a.length) {
+    HELP_PAGES[0].forEach((l) => print(l));
+    print("  (help 2 | help 3 | help <command>)");
+    return;
+  }
+
+  // page number?
+  if (a.length === 1 && /^\d+$/.test(a[0])) {
+    const page = Math.max(1, Math.min(HELP_PAGES.length, parseInt(a[0], 10))) - 1;
+    HELP_PAGES[page].forEach((l) => print(l));
+    return;
+  }
+
+  for (const name of a) {
+    const key = name.toLowerCase().replace(/^-+/, "");
+    if (/^\d+$/.test(key)) {
+      const page = Math.max(1, Math.min(HELP_PAGES.length, parseInt(key, 10))) - 1;
+      HELP_PAGES[page].forEach((l) => print(l));
+      continue;
+    }
+    const lines = CMD_HELP[key];
+    if (lines) lines.forEach((l) => print(l));
+    else print("No detailed help for '" + name + "'. Try: help | help 1|2|3", "err");
+  }
 }
 
-async function loadCustomCommands() {
+async function loadCustomCommandsasync function loadCustomCommands() {
   try {
     const raw = await db.getMeta("custom_commands");
     if (raw) customCommands = raw;
@@ -2122,5 +2166,28 @@ Rules include: eqeqeq, no-eval, empty-catch, unused-var, react-key,
     else if (l.includes("WARNING") || l.startsWith("⚠")) print(l, "err");
     else if (l.startsWith("✓")) print(l, "ok");
     else print(l);
+  });
+}
+
+
+
+async function cmdLang(args) {
+  const lr = await import("./lang-runner.js");
+  const sub = (args[0] || "help").toLowerCase();
+  if (sub === "help" || sub === "-h") {
+    print("lang lua <entry.lua>");
+    print("lang c|cpp|rust|go <entry>   — multifile project + //!n3xn config");
+    print("  //!n3xn display=terminal files=main.c,util.c");
+    print("  //!n3xn display=preview title=MyApp");
+    print("  Prebuilt <entry>.wasm runs via WebAssembly.instantiate");
+    return;
+  }
+  const lang = ["lua", "c", "cpp", "rust", "go"].includes(sub) ? sub : null;
+  const path = resolve(lang ? args[1] : args[0] || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: lang <lua|c|cpp|rust|go> <entry>");
+  print("lang → " + path);
+  await lr.runLanguageFile(path, {
+    lang: lang || undefined,
+    log: (m, c) => print(m, c || "out"),
   });
 }
