@@ -33,6 +33,16 @@ let onLog = (msg, cls) => console.log(msg);
 let transfers = new Map(); // id -> { path, mime, chunks[], total, from }
 let collabDoc = null; // { path, version, applying }
 let statusEl = null;
+/** @type {Map<string, { id, user, path, line, column, color, lastSeen, decorationIds, widget }>} */
+const remoteCursors = new Map();
+let cursorSendTimer = null;
+let lastSentCursor = null; // { path, line, column }
+let cursorHooked = false;
+const CURSOR_PALETTE = [
+  "#00f3ff", "#ff79c6", "#4ade80", "#fbbf24", "#a78bfa",
+  "#fb7185", "#38bdf8", "#f472b6", "#34d399", "#facc15",
+];
+
 
 export function setLogger(fn) {
   onLog = fn || onLog;
@@ -111,6 +121,7 @@ export async function connect(url, password, opts = {}) {
       ws = null;
       myId = null;
       peers.clear();
+      clearRemoteCursors();
       updateStatusBar();
     };
     ws.onmessage = (ev) => handleRaw(ev.data);
@@ -144,6 +155,7 @@ export async function disconnect() {
   peers.clear();
   collabDoc = null;
   transfers.clear();
+  clearRemoteCursors();
   updateStatusBar();
   log("Disconnected", "out");
 }
@@ -204,6 +216,7 @@ function handleRelayControl(j) {
     updateStatusBar();
   } else if (j.t === "_leave") {
     peers.delete(j.id);
+    removeRemoteCursor(j.id);
     log(`Peer left: ${j.id} (n=${j.n})`, "out");
     updateStatusBar();
   }
@@ -221,6 +234,7 @@ async function handleAppMessage(msg) {
       break;
     case "bye":
       peers.delete(from);
+      removeRemoteCursor(from);
       log(`[${from}] bye`, "out");
       updateStatusBar();
       break;
@@ -250,12 +264,20 @@ async function handleAppMessage(msg) {
     }
     case "collab_open":
       log(`[${from}] collab open ${msg.path}`, "ok");
+      if (msg.cursor && msg.path) {
+        handleRemoteCursor(from, {
+          path: msg.path,
+          line: msg.cursor.line,
+          column: msg.cursor.column,
+          user: msg.user || peers.get(from)?.user,
+        });
+      }
       break;
     case "collab_edit":
       await applyRemoteEdit(msg);
       break;
     case "collab_cursor":
-      // optional UI later
+      handleRemoteCursor(from, msg);
       break;
     case "fs_pull_req":
       await respondPull(msg);
@@ -438,14 +460,25 @@ export async function pullFile(path) {
 export async function collabJoin(path) {
   path = path.startsWith("/") ? path : "/" + path;
   collabDoc = { path, version: 0, applying: false };
-  await sendEnc({ t: "collab_open", path });
+  const cur = getLocalCursor();
+  await sendEnc({
+    t: "collab_open",
+    path,
+    user: db.getCurrentUser() || "anon",
+    cursor: cur || undefined,
+  });
   log(`Collab session: ${path}`, "ok");
   updateStatusBar();
   hookEditor();
+  hookCursor();
+  sendLocalCursor(true);
+  refreshRemoteCursorsForActiveModel();
 }
 
 export function collabLeave() {
   collabDoc = null;
+  // hide decorations for other files but keep peer state until leave
+  hideAllCursorWidgets();
   updateStatusBar();
   log("Left collab session", "out");
 }
@@ -479,6 +512,303 @@ function hookEditor() {
       }
     }, 350);
   });
+}
+
+/* ========== Remote collaborative cursors (Google-Docs style) ========== */
+
+function colorForPeer(id) {
+  let h = 0;
+  const s = String(id || "");
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return CURSOR_PALETTE[h % CURSOR_PALETTE.length];
+}
+
+function ensureCursorCss() {
+  if (document.getElementById("n3xn-collab-cursor-css")) return;
+  const style = document.createElement("style");
+  style.id = "n3xn-collab-cursor-css";
+  style.textContent = `
+.n3xn-remote-caret {
+  border-left: 2px solid var(--n3xn-rc, #00f3ff);
+  margin-left: -1px;
+  pointer-events: none;
+}
+.n3xn-remote-line {
+  background: color-mix(in srgb, var(--n3xn-rc, #00f3ff) 12%, transparent) !important;
+}
+.n3xn-remote-name {
+  pointer-events: none;
+  user-select: none;
+  font-size: 10px;
+  line-height: 1.2;
+  font-family: system-ui, sans-serif;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: #0a0a0f;
+  background: var(--n3xn-rc, #00f3ff);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.45);
+  white-space: nowrap;
+  max-width: 96px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateY(-100%);
+  opacity: 0.95;
+}
+`;
+  document.head.appendChild(style);
+}
+
+function getLocalCursor() {
+  const ed = window.__n3xnEditor;
+  if (!ed) return null;
+  const pos = ed.getPosition();
+  if (!pos) return null;
+  return { line: pos.lineNumber, column: pos.column };
+}
+
+function hookCursor() {
+  if (cursorHooked) return;
+  const ed = window.__n3xnEditor;
+  if (!ed) return;
+  cursorHooked = true;
+  ensureCursorCss();
+  ed.onDidChangeCursorPosition(() => {
+    if (!isConnected() || !collabDoc) return;
+    if (window.__n3xnActivePath !== collabDoc.path) return;
+    if (collabDoc.applying) return;
+    scheduleSendLocalCursor();
+  });
+  // When active file changes, refresh which remote cursors are visible
+  try {
+    const orig = window.__n3xnOpenFile;
+    // lightweight poll via path check on cursor events is enough; also listen content
+  } catch (_) {}
+}
+
+function scheduleSendLocalCursor() {
+  if (cursorSendTimer) return;
+  cursorSendTimer = setTimeout(() => {
+    cursorSendTimer = null;
+    sendLocalCursor(false);
+  }, 40); // ~25/sec cap
+}
+
+async function sendLocalCursor(force) {
+  if (!isConnected() || !collabDoc) return;
+  const ed = window.__n3xnEditor;
+  if (!ed || window.__n3xnActivePath !== collabDoc.path) return;
+  const pos = ed.getPosition();
+  if (!pos) return;
+  const payload = {
+    path: collabDoc.path,
+    line: pos.lineNumber,
+    column: pos.column,
+  };
+  if (
+    !force &&
+    lastSentCursor &&
+    lastSentCursor.path === payload.path &&
+    lastSentCursor.line === payload.line &&
+    lastSentCursor.column === payload.column
+  ) {
+    return;
+  }
+  lastSentCursor = payload;
+  try {
+    await sendEnc({
+      t: "collab_cursor",
+      path: payload.path,
+      line: payload.line,
+      column: payload.column,
+      user: db.getCurrentUser() || "anon",
+    });
+  } catch (_) {}
+}
+
+function handleRemoteCursor(from, msg) {
+  if (!from || from === myId) return;
+  if (!msg || !msg.path) return;
+  const line = Math.max(1, parseInt(msg.line, 10) || 1);
+  const column = Math.max(1, parseInt(msg.column, 10) || 1);
+  const user =
+    (typeof msg.user === "string" && msg.user) ||
+    peers.get(from)?.user ||
+    from;
+  const prev = remoteCursors.get(from);
+  const color = prev?.color || colorForPeer(from);
+  const entry = {
+    id: from,
+    user: String(user).slice(0, 32),
+    path: msg.path,
+    line,
+    column,
+    color,
+    lastSeen: Date.now(),
+    decorationIds: prev?.decorationIds || [],
+    widget: prev?.widget || null,
+  };
+  // store user on peer map
+  const p = peers.get(from) || { lastSeen: Date.now() };
+  p.user = entry.user;
+  p.lastSeen = Date.now();
+  peers.set(from, p);
+
+  remoteCursors.set(from, entry);
+  if (window.__n3xnActivePath === entry.path) {
+    renderRemoteCursor(from);
+  } else {
+    // not active file — remove visible widgets only
+    unrenderRemoteCursor(from, entry);
+  }
+}
+
+function clampPos(ed, line, column) {
+  const model = ed.getModel();
+  if (!model) return { lineNumber: 1, column: 1 };
+  const maxLine = model.getLineCount();
+  const ln = Math.min(Math.max(1, line), maxLine);
+  const maxCol = model.getLineMaxColumn(ln);
+  const col = Math.min(Math.max(1, column), maxCol);
+  return { lineNumber: ln, column: col };
+}
+
+function renderRemoteCursor(peerId) {
+  const ed = window.__n3xnEditor;
+  const entry = remoteCursors.get(peerId);
+  if (!ed || !entry || !window.monaco) return;
+  ensureCursorCss();
+  if (window.__n3xnActivePath !== entry.path) {
+    unrenderRemoteCursor(peerId, entry);
+    return;
+  }
+
+  const pos = clampPos(ed, entry.line, entry.column);
+  entry.line = pos.lineNumber;
+  entry.column = pos.column;
+
+  const safeId = String(peerId).replace(/[^a-zA-Z0-9_-]/g, "");
+  const caretClass = "n3xn-remote-caret n3xn-rc-" + safeId;
+  const lineClass = "n3xn-remote-line n3xn-rl-" + safeId;
+
+  // per-peer color CSS vars
+  let tag = document.getElementById("n3xn-rc-style-" + safeId);
+  if (!tag) {
+    tag = document.createElement("style");
+    tag.id = "n3xn-rc-style-" + safeId;
+    document.head.appendChild(tag);
+  }
+  tag.textContent = `
+.n3xn-rc-${safeId}, .n3xn-rl-${safeId} { --n3xn-rc: ${entry.color}; }
+.n3xn-rc-${safeId} { border-left-color: ${entry.color} !important; }
+.n3xn-rl-${safeId} { background: ${entry.color}22 !important; }
+`;
+
+  const stick =
+    monaco.editor.TrackedRangeStickiness?.NeverGrowsWhenTypingAtEdges ?? 1;
+
+  entry.decorationIds = ed.deltaDecorations(entry.decorationIds || [], [
+    {
+      range: new monaco.Range(pos.lineNumber, pos.column, pos.lineNumber, pos.column),
+      options: {
+        className: caretClass,
+        stickiness: stick,
+      },
+    },
+    {
+      range: new monaco.Range(pos.lineNumber, 1, pos.lineNumber, 1),
+      options: {
+        isWholeLine: true,
+        className: lineClass,
+        stickiness: stick,
+      },
+    },
+  ]);
+
+  // name badge content widget
+  if (!entry.widget) {
+    const dom = document.createElement("div");
+    dom.className = "n3xn-remote-name";
+    dom.style.setProperty("--n3xn-rc", entry.color);
+    dom.style.background = entry.color;
+    dom.textContent = entry.user;
+    entry.widget = {
+      domNode: dom,
+      getId: () => "n3xn-cursor-widget-" + peerId,
+      getDomNode: () => dom,
+      getPosition: () => ({
+        position: { lineNumber: entry.line, column: entry.column },
+        preference: [
+          monaco.editor.ContentWidgetPositionPreference.ABOVE,
+          monaco.editor.ContentWidgetPositionPreference.BELOW,
+        ],
+      }),
+    };
+    ed.addContentWidget(entry.widget);
+  } else {
+    entry.widget.domNode.textContent = entry.user;
+    entry.widget.domNode.style.background = entry.color;
+    ed.layoutContentWidget(entry.widget);
+  }
+
+  remoteCursors.set(peerId, entry);
+}
+
+function unrenderRemoteCursor(peerId, entry) {
+  const ed = window.__n3xnEditor;
+  if (!entry) entry = remoteCursors.get(peerId);
+  if (!entry) return;
+  if (ed && entry.decorationIds?.length) {
+    entry.decorationIds = ed.deltaDecorations(entry.decorationIds, []);
+  }
+  if (ed && entry.widget) {
+    try {
+      ed.removeContentWidget(entry.widget);
+    } catch (_) {}
+    entry.widget = null;
+  }
+  if (remoteCursors.has(peerId)) {
+    const e = remoteCursors.get(peerId);
+    e.decorationIds = [];
+    e.widget = null;
+  }
+}
+
+function removeRemoteCursor(peerId) {
+  const entry = remoteCursors.get(peerId);
+  if (entry) unrenderRemoteCursor(peerId, entry);
+  remoteCursors.delete(peerId);
+  const safeId = String(peerId).replace(/[^a-zA-Z0-9_-]/g, "");
+  document.getElementById("n3xn-rc-style-" + safeId)?.remove();
+}
+
+function clearRemoteCursors() {
+  for (const id of [...remoteCursors.keys()]) removeRemoteCursor(id);
+}
+
+function hideAllCursorWidgets() {
+  for (const [id, entry] of remoteCursors) {
+    unrenderRemoteCursor(id, entry);
+  }
+}
+
+export function refreshRemoteCursorsForActiveModel() {
+  const path = window.__n3xnActivePath;
+  for (const [id, entry] of remoteCursors) {
+    if (entry.path === path) renderRemoteCursor(id);
+    else unrenderRemoteCursor(id, entry);
+  }
+}
+
+// Expose refresh when user switches files (editor openFile sets __n3xnActivePath)
+if (typeof window !== "undefined") {
+  let lastPath = null;
+  setInterval(() => {
+    const p = window.__n3xnActivePath || null;
+    if (p !== lastPath) {
+      lastPath = p;
+      if (remoteCursors.size) refreshRemoteCursorsForActiveModel();
+    }
+  }, 400);
 }
 
 export async function ping() {
