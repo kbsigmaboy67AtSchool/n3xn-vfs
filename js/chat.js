@@ -38,6 +38,9 @@ let micEnabled = true;
 let audioCtx = null;
 let analyser = null;
 let levelTimer = null;
+let localBus = null; // BroadcastChannel — same-browser / no-WSS local mode
+let localMode = false;
+
 
 export function setChatHandlers({ log, message, presence, vcLevel } = {}) {
   if (log) onLog = log;
@@ -51,7 +54,7 @@ export function getPublicRooms() {
 }
 
 export function isChatConnected() {
-  return ws && ws.readyState === WebSocket.OPEN;
+  return (ws && ws.readyState === WebSocket.OPEN) || (localMode && !!localBus);
 }
 
 export function getChatStatus() {
@@ -130,6 +133,58 @@ export async function chatConnect(relayBase, room = "global-text") {
   return getChatStatus();
 }
 
+/** Local-only mode via BroadcastChannel (same origin tabs) — no WSS required */
+export async function chatConnectLocal(room = "global-text") {
+  await chatDisconnect();
+  localMode = true;
+  roomId = room || "global-text";
+  myId = "local-" + crypto.randomUUID().slice(0, 6);
+  try {
+    localBus = new BroadcastChannel("n3xn-chat-" + roomId);
+  } catch (e) {
+    throw new Error("BroadcastChannel unavailable: " + e.message);
+  }
+  localBus.onmessage = (ev) => {
+    const msg = ev.data;
+    if (!msg || msg.from === myId) return;
+    handleMsg(msg);
+  };
+  peers.set(myId, { user: db.getCurrentUser() || "you", mic: micEnabled, level: 0 });
+  onLog("Local chat room " + roomId + " (BroadcastChannel, no WSS)", "ok");
+  onPresence(getChatStatus());
+  localBus.postMessage({
+    t: "hello",
+    from: myId,
+    user: db.getCurrentUser() || "anon",
+    mic: micEnabled,
+    ts: Date.now(),
+  });
+  return getChatStatus();
+}
+
+export function openChatSidebar() {
+  const side = document.getElementById("chat-sidebar");
+  if (!side) return false;
+  side.classList.remove("collapsed");
+  return true;
+}
+
+export function closeChatSidebar() {
+  const side = document.getElementById("chat-sidebar");
+  if (!side) return false;
+  side.classList.add("collapsed");
+  setSidebarCollapsed(true);
+  return true;
+}
+
+export function toggleChatSidebar() {
+  const side = document.getElementById("chat-sidebar");
+  if (!side) return false;
+  side.classList.toggle("collapsed");
+  setSidebarCollapsed(side.classList.contains("collapsed"));
+  return !side.classList.contains("collapsed");
+}
+
 export async function chatDisconnect() {
   try {
     if (isChatConnected()) await sendEnc({ t: "bye", user: db.getCurrentUser() || "anon" });
@@ -144,14 +199,23 @@ export async function chatDisconnect() {
     ws?.close();
   } catch {}
   ws = null;
+  try {
+    localBus?.close();
+  } catch {}
+  localBus = null;
+  localMode = false;
   myId = null;
   peers.clear();
   onPresence(getChatStatus());
 }
 
 async function sendEnc(obj) {
-  if (!isChatConnected()) throw new Error("Chat not connected");
   const payload = { ...obj, from: myId || "local", ts: Date.now() };
+  if (localMode && localBus) {
+    localBus.postMessage(payload);
+    return;
+  }
+  if (!isChatConnected()) throw new Error("Chat not connected");
   const encrypted = await encrypt(JSON.stringify(payload), PUBLIC_ROOM_KEY);
   ws.send(JSON.stringify({ v: 1, e: toBase64(encrypted) }));
 }
