@@ -370,6 +370,9 @@ async function run(line) {
       case "nexc":
         await cmdNexc(args);
         break;
+      case "xdebug":
+        await cmdXdebug(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -963,6 +966,7 @@ function showHelp() {
     "  storage list|use|info|ls|cat|put|rm|meta",
     "  perf | performance   — memory, quota, device",
     "  nexc list|run|remote <file.nexc> [module]",
+    "  xdebug <path> [--live] | tryfix | last | open | copy | fix",
     "  logs on|off|copy|clear  — mirror browser console to terminal",
     "  cmd list|add|rm   — manage custom commands",
     "",
@@ -1966,4 +1970,102 @@ Example file:
   }
 
   print("Usage: nexc help|list|run|remote …");
+}
+
+
+async function cmdXdebug(args) {
+  const xd = await import("./xdebug.js");
+  const sub = (args[0] || "").toLowerCase();
+  const live = args.includes("--live") || args.includes("-l");
+
+  if (sub === "help" || !args.length) {
+    print(`xdebug v2 — advanced non-AI debugger
+  xdebug <file|dir|zip> [--live]   static + smells; --live = runtime iframe probe
+  xdebug last                      last error/warn overlays
+  xdebug open | copy | fix         last finding actions
+  xdebug tryfix [file]             apply safe syntax fixes (=== , braces, JSON commas)
+  xdebug live <file>               force live probe
+
+Rules include: eqeqeq, no-eval, empty-catch, unused-var, react-key,
+  floating-promise, bare-except, mutable-default, image-decode, n3site assets…`);
+    if (!args.length) return;
+  }
+
+  if (sub === "last") {
+    const errs = xd.getLastFindings().filter((f) => f.severity === "error" || f.severity === "warn");
+    if (!errs.length) return print("No findings yet");
+    errs.slice(-8).forEach((e) => xd.formatOverlay(e).forEach((l) => print(l, e.severity === "error" ? "err" : "out")));
+    return;
+  }
+  if (sub === "open") {
+    const errs = xd.getLastFindings();
+    const e = [...errs].reverse().find((x) => x.path);
+    if (!e) throw new Error("No finding path");
+    const path = e.path.split("#")[0];
+    if (window.__n3xnOpenFile) await window.__n3xnOpenFile(path);
+    else print("Open: " + path);
+    return;
+  }
+  if (sub === "copy") {
+    const errs = xd.getLastFindings().filter((f) => f.severity === "error" || f.severity === "warn");
+    const e = errs[errs.length - 1];
+    if (!e) throw new Error("No finding");
+    await navigator.clipboard.writeText(xd.formatOverlay(e).join("\n"));
+    print("Copied", "ok");
+    return;
+  }
+  if (sub === "fix") {
+    const errs = xd.getLastFindings();
+    const e = [...errs].reverse().find((x) => x.severity === "error") || errs[errs.length - 1];
+    if (!e) throw new Error("No finding");
+    const text = xd.fixPrompt(e);
+    await navigator.clipboard.writeText(text);
+    print("Fix prompt copied", "ok");
+    return;
+  }
+  if (sub === "tryfix") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    if (!path) throw new Error("Usage: xdebug tryfix <file>");
+    const f = await fs.readFile(path);
+    if (!f) throw new Error("Not found");
+    // ensure findings exist
+    await xd.xdebugPath(path, { live: false });
+    const result = await xd.tryFix(path, f.text(), null);
+    if (!result.changed) {
+      print("No safe automatic fixes applied", "out");
+      result.applied.forEach((a) => print("  · " + a));
+      return;
+    }
+    print("Applied:", "ok");
+    result.applied.forEach((a) => print("  ✓ " + a, "ok"));
+    if (!confirm("Write fixed content to " + path + "?")) {
+      print("Aborted (preview only). Re-run and confirm to save.", "err");
+      print(result.text.slice(0, 2000));
+      return;
+    }
+    await fs.writeFile(path, result.text);
+    print("Saved " + path, "ok");
+    if (window.__n3xnActivePath === path && window.__n3xnEditor) {
+      try { window.__n3xnEditor.setValue(result.text); } catch {}
+    }
+    // re-scan
+    const again = await xd.xdebugPath(path, { live: false });
+    xd.formatReport(again, path).forEach((l) => print(l));
+    return;
+  }
+
+  const pathArg = ["live", "tryfix", "last", "open", "copy", "fix", "help"].includes(sub)
+    ? args[1]
+    : args[0];
+  const path = resolve(pathArg || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: xdebug <path> [--live]");
+  const useLive = live || sub === "live";
+  print(`xdebug → ${path}${useLive ? " (live)" : ""} …`);
+  const result = await xd.xdebugPath(path, { live: useLive });
+  xd.formatReport(result, path).forEach((l) => {
+    if (l.includes("ERROR") || l.startsWith("✗")) print(l, "err");
+    else if (l.includes("WARNING") || l.startsWith("⚠")) print(l, "err");
+    else if (l.startsWith("✓")) print(l, "ok");
+    else print(l);
+  });
 }
