@@ -188,6 +188,13 @@ async function bootApp() {
   await ed.initEditor();
   await refreshTree();
   window.refreshTree = refreshTree;
+  window.__n3xnOpenFile = async (path) => {
+    try {
+      await ed.openFile(path);
+    } catch (e) {
+      console.warn(e);
+    }
+  };
   bindToolButtons(); // re-bind after UI is visible
   import("./github.js")
     .then((gh) => gh.loadSavedToken())
@@ -672,7 +679,7 @@ export function registerServiceWorker() {
       console.log("[n3xn] SW registered", reg.scope);
       reg.update().catch(() => {});
     })
-    .catch((err) => console.warn("[n3xn] SW register failed", err));
+    .catch((err) => console.warn("[n3xn] SW register failed (ignored)", err && err.message ? err.message : err));
 }
 
 function setupInstallPrompt() {
