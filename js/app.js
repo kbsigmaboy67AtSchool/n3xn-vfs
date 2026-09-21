@@ -258,7 +258,19 @@ function renderCollabFsList(list) {
         return;
       }
       try {
-        await ed.openFile(f.key);
+        const collab = await import("./collab.js");
+        const bytes = collab.readSharedContent(f.key);
+        if (bytes && window.__n3xnOpenMemoryFile) {
+          await window.__n3xnOpenMemoryFile(f.key, bytes, f.mime);
+        } else if (bytes) {
+          // fallback: write temp not in collab path
+          setStatus("Opening shared " + f.key);
+          const { openFile } = await import("./editor.js");
+          // inject via editor if available
+          await ed.openFile(f.path);
+        } else {
+          await ed.openFile(f.path);
+        }
       } catch (e) {
         setStatus("Open failed: " + e.message);
       }
@@ -326,6 +338,8 @@ function renderNode(container, node, path, depth) {
 
   for (const [name, child] of entries) {
     if (!child) continue;
+    if (name === "collab" && path === "/") continue; // Collab FS only, not VFS
+    if (name === ".n3xn-collab" && path === "/") continue; // internal IDB collab cache
     const full = path === "/" ? "/" + name : path + "/" + name;
     const item = document.createElement("div");
     item.className = "tree-item";
@@ -945,3 +959,151 @@ setupInstallPrompt();
 
 // Restore GitHub token after login
 const _bootApp = typeof bootApp === "function" ? bootApp : null;
+
+
+/* ========== Chat sidebar (public rooms) ========== */
+(function initChatSidebar() {
+  const side = document.getElementById("chat-sidebar");
+  if (!side) return;
+  const msgs = document.getElementById("chat-messages");
+  const peersEl = document.getElementById("chat-peers");
+  const micBtn = document.getElementById("btn-mic");
+  let videoOn = false;
+
+  function appendMsg(m) {
+    if (!msgs) return;
+    import("./collab.js").then(async (collab) => {
+      // reuse markdown renderer from collab if exported
+      let body;
+      try {
+        const { renderMarkdownSafe } = await import("./collab.js");
+        body = renderMarkdownSafe(m.text);
+      } catch {
+        body = document.createElement("div");
+        body.textContent = m.text;
+      }
+      const wrap = document.createElement("div");
+      wrap.className = "chat-msg";
+      const meta = document.createElement("div");
+      meta.className = "chat-msg-meta";
+      meta.textContent = `${m.user || m.from} · ${new Date(m.ts || Date.now()).toLocaleTimeString()}`;
+      const content = document.createElement("div");
+      content.className = "chat-msg-body";
+      content.appendChild(body);
+      wrap.appendChild(meta);
+      wrap.appendChild(content);
+      msgs.appendChild(wrap);
+      msgs.scrollTop = msgs.scrollHeight;
+    });
+  }
+
+  function renderPeers(st) {
+    if (!peersEl) return;
+    peersEl.innerHTML = "";
+    (st.peers || []).forEach((p) => {
+      const el = document.createElement("span");
+      el.className = "chat-peer" + (p.mic ? " mic-on" : "") + (p.level > 0.12 ? " talking" : "");
+      el.id = "chat-peer-" + p.id;
+      el.textContent = (p.user || p.id).slice(0, 16) + (p.mic ? " 🎤" : "");
+      el.style.boxShadow = p.level > 0.05 ? `0 0 ${8 + p.level * 20}px rgba(0,243,255,${0.3 + p.level * 0.5})` : "";
+      peersEl.appendChild(el);
+    });
+    if (micBtn) {
+      micBtn.classList.toggle("mic-on", st.mic);
+      micBtn.classList.toggle("mic-off", !st.mic);
+    }
+  }
+
+  document.getElementById("btn-chat-toggle")?.addEventListener("click", () => {
+    side.classList.toggle("collapsed");
+    const collapsed = side.classList.contains("collapsed");
+    import("./chat.js").then((c) => c.setSidebarCollapsed?.(collapsed)).catch(() => {});
+  });
+
+  // offer file-bound room when a collab path is active
+  const roomSel = document.getElementById("chat-room-select");
+  setInterval(() => {
+    if (!roomSel) return;
+    const path = window.__n3xnActivePath;
+    let opt = roomSel.querySelector('option[data-file-room]');
+    if (path && path.startsWith("/collab/")) {
+      if (!opt) {
+        opt = document.createElement("option");
+        opt.dataset.fileRoom = "1";
+        roomSel.appendChild(opt);
+      }
+      const rid = "file-" + path.replace(/\W+/g, "-").slice(0, 40);
+      opt.value = rid;
+      opt.textContent = "File: " + path.slice(0, 28);
+    } else if (opt) {
+      opt.remove();
+    }
+  }, 1000);
+
+  document.getElementById("btn-chat-join")?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    const relay = document.getElementById("chat-relay-url")?.value?.trim();
+    const room = document.getElementById("chat-room-select")?.value || "global-text";
+    if (!relay) {
+      setStatus("Enter WSS relay base URL");
+      return;
+    }
+    chat.setChatHandlers({
+      log: (m, c) => setStatus(m),
+      message: appendMsg,
+      presence: renderPeers,
+      vcLevel: (id, level) => {
+        const el = document.getElementById("chat-peer-" + id);
+        if (el) {
+          el.classList.toggle("talking", level > 0.12);
+          el.style.boxShadow =
+            level > 0.05 ? `0 0 ${8 + level * 20}px rgba(0,243,255,${0.3 + level * 0.5})` : "";
+        }
+      },
+    });
+    await chat.chatConnect(relay, room);
+    setStatus("Joined chat room " + room);
+  });
+
+  document.getElementById("btn-chat-leave")?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    await chat.chatDisconnect();
+  });
+
+  document.getElementById("btn-chat-send")?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    const input = document.getElementById("chat-input");
+    const text = input?.value || "";
+    await chat.sendChat(text);
+    if (input) input.value = "";
+  });
+
+  document.getElementById("chat-input")?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById("btn-chat-send")?.click();
+    }
+  });
+
+  micBtn?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    if (!chat.isChatConnected()) {
+      // fall back: collab room mic if available
+      setStatus("Join a chat room first (or use wss VC)");
+    }
+    const on = await chat.toggleMic();
+    setStatus(on ? "Mic on" : "Mic off");
+  });
+
+  document.getElementById("btn-vc-join")?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    await chat.joinVcMesh();
+  });
+
+  document.getElementById("btn-vc-video")?.addEventListener("click", async () => {
+    const chat = await import("./chat.js");
+    videoOn = !videoOn;
+    await chat.setVideo(videoOn);
+    setStatus(videoOn ? "Video on" : "Video off");
+  });
+})();
