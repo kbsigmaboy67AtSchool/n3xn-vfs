@@ -191,6 +191,7 @@ async function bootApp() {
   window.__n3xnOpenFile = async (path) => {
     try {
       await ed.openFile(path);
+      import("./collab.js").then((c) => c.refreshRemoteCursorsForActiveModel?.()).catch(() => {});
     } catch (e) {
       console.warn(e);
     }
