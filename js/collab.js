@@ -31,6 +31,11 @@ let myId = null;
 let peers = new Map(); // id -> { lastSeen }
 let onLog = (msg, cls) => console.log(msg);
 let transfers = new Map(); // id -> { path, mime, chunks[], total, from }
+/** Collab FS catalog: key = collabPath "/collab/<from>/<path>" */
+const sharedFiles = new Map(); // key -> { key, path, from, fromUser, mime, size, status, id, content, updated }
+let myShares = new Map(); // path -> { id, mime, size }
+let collabFsListeners = [];
+
 let collabDoc = null; // { path, version, applying }
 let statusEl = null;
 /** @type {Map<string, { id, user, path, line, column, color, lastSeen, decorationIds, widget }>} */
@@ -64,6 +69,41 @@ export function setLogger(fn) {
 function log(msg, cls = "out") {
   onLog(msg, cls);
 }
+
+export function onCollabFsChange(fn) {
+  if (typeof fn === "function") collabFsListeners.push(fn);
+}
+function notifyCollabFs() {
+  const list = listSharedFiles();
+  for (const fn of collabFsListeners) {
+    try {
+      fn(list);
+    } catch (_) {}
+  }
+  if (window.__n3xnRefreshCollabFs) {
+    try {
+      window.__n3xnRefreshCollabFs(list);
+    } catch (_) {}
+  }
+}
+
+export function listSharedFiles() {
+  return [...sharedFiles.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+export function getSharedFile(keyOrPath) {
+  if (sharedFiles.has(keyOrPath)) return sharedFiles.get(keyOrPath);
+  for (const v of sharedFiles.values()) {
+    if (v.path === keyOrPath || v.key.endsWith(keyOrPath)) return v;
+  }
+  return null;
+}
+
+function collabKey(from, path) {
+  const p = path.startsWith("/") ? path : "/" + path;
+  return `/collab/${from}${p}`;
+}
+
 
 export function isConnected() {
   return ws && ws.readyState === WebSocket.OPEN;
@@ -149,6 +189,7 @@ export async function connect(url, password, opts = {}) {
         agent: "n3xn-vfs-v2",
         collab: collabDoc?.path || null,
       });
+      setTimeout(() => announceMyShares().catch(() => {}), 400);
     }
   }, 200);
 
@@ -169,6 +210,9 @@ export async function disconnect() {
   collabDoc = null;
   transfers.clear();
   clearRemoteCursors();
+  sharedFiles.clear();
+  myShares.clear();
+  notifyCollabFs();
   updateStatusBar();
   log("Disconnected", "out");
 }
@@ -230,6 +274,7 @@ function handleRelayControl(j) {
   } else if (j.t === "_leave") {
     peers.delete(j.id);
     removeRemoteCursor(j.id);
+    removeSharesFromPeer(j.id);
     log(`Peer left: ${j.id} (n=${j.n})`, "out");
     updateStatusBar();
   }
@@ -248,6 +293,7 @@ async function handleAppMessage(msg) {
     case "bye":
       peers.delete(from);
       removeRemoteCursor(from);
+      removeSharesFromPeer(from);
       log(`[${from}] bye`, "out");
       updateStatusBar();
       break;
@@ -256,6 +302,7 @@ async function handleAppMessage(msg) {
       break;
     case "file_meta":
       transfers.set(msg.id, {
+        id: msg.id,
         path: msg.path,
         mime: msg.mime,
         total: msg.chunks,
@@ -263,7 +310,47 @@ async function handleAppMessage(msg) {
         from,
         parts: new Array(msg.chunks),
       });
-      log(`[${from}] file offer: ${msg.path} (${msg.size}b, ${msg.chunks} chunks)`, "ok");
+      {
+        const key = collabKey(from, msg.path);
+        sharedFiles.set(key, {
+          key,
+          path: msg.path.startsWith("/") ? msg.path : "/" + msg.path,
+          from,
+          fromUser: peers.get(from)?.user || msg.user || from,
+          mime: msg.mime,
+          size: msg.size || 0,
+          status: "streaming",
+          id: msg.id,
+          updated: Date.now(),
+        });
+        notifyCollabFs();
+      }
+      log(`[${from}] sharing → ${msg.path} (${msg.size}b, ${msg.chunks} chunks)`, "ok");
+      break;
+    case "share_revoke":
+      revokeShared(from, msg.path, msg.id);
+      break;
+    case "share_list":
+      // peer announces currently shared paths (metadata only — re-pull if needed)
+      if (Array.isArray(msg.files)) {
+        for (const f of msg.files) {
+          const key = collabKey(from, f.path);
+          if (!sharedFiles.has(key)) {
+            sharedFiles.set(key, {
+              key,
+              path: f.path,
+              from,
+              fromUser: peers.get(from)?.user || from,
+              mime: f.mime,
+              size: f.size || 0,
+              status: "announced",
+              id: f.id,
+              updated: Date.now(),
+            });
+          }
+        }
+        notifyCollabFs();
+      }
       break;
     case "file_chunk": {
       const tr = transfers.get(msg.id);
@@ -334,20 +421,50 @@ async function assembleTransfer(id) {
   const tr = transfers.get(id);
   if (!tr) return;
   try {
+    // ensure all chunks present
+    for (let i = 0; i < tr.total; i++) {
+      if (tr.parts[i] == null) {
+        log(`Share ${id}: missing chunk ${i}/${tr.total}`, "err");
+        return;
+      }
+    }
     const b64 = tr.parts.join("");
     const bytes = fromBase64(b64);
-    const dest = tr.path.startsWith("/") ? tr.path : "/" + tr.path;
-    // ensure parents
+    const orig = tr.path.startsWith("/") ? tr.path : "/" + tr.path;
+    const from = tr.from || "peer";
+    const key = collabKey(from, orig);
+    // Mirror under /collab/<peerId>/...
+    const dest = key;
     const parts = dest.split("/").filter(Boolean);
     parts.pop();
     let cur = "";
     for (const p of parts) {
       cur += "/" + p;
-      if (!fs.exists(cur)) await fs.mkdir(cur);
+      if (!fs.exists(cur)) {
+        try {
+          await fs.mkdir(cur, { parents: true });
+        } catch {
+          try {
+            await fs.mkdir(cur);
+          } catch {}
+        }
+      }
     }
-    await fs.writeFile(dest, bytes, { mime: tr.mime });
-    log(`Received file → ${dest} (${bytes.length}b) from ${tr.from}`, "ok");
+    await fs.writeFile(dest, bytes, { mime: tr.mime || "application/octet-stream" });
+    sharedFiles.set(key, {
+      key,
+      path: orig,
+      from,
+      fromUser: peers.get(from)?.user || from,
+      mime: tr.mime,
+      size: bytes.length,
+      status: "ready",
+      id: tr.id || id,
+      updated: Date.now(),
+    });
+    log(`Collab FS ← ${key} (${bytes.length}b)`, "ok");
     transfers.delete(id);
+    notifyCollabFs();
     if (window.refreshTree) window.refreshTree();
   } catch (e) {
     log(`Assemble failed: ${e.message}`, "err");
@@ -460,6 +577,7 @@ export async function chat(text) {
 
 /** Share a VFS file to the room (chunked, encrypted) */
 export async function shareFile(path) {
+  path = path.startsWith("/") ? path : "/" + path;
   const f = await fs.readFile(path);
   if (!f) throw new Error("File not found: " + path);
   const b64 = toBase64(f.content);
@@ -468,6 +586,27 @@ export async function shareFile(path) {
     chunks.push(b64.slice(i, i + CHUNK));
   }
   const id = crypto.randomUUID().slice(0, 10);
+  // local catalog entry (our own share visible in Collab FS)
+  if (myId) {
+    const key = collabKey(myId, path);
+    sharedFiles.set(key, {
+      key,
+      path,
+      from: myId,
+      fromUser: db.getCurrentUser() || "you",
+      mime: f.mime,
+      size: f.content.length,
+      status: "ready",
+      id,
+      updated: Date.now(),
+    });
+    // also mirror under /collab for consistency
+    try {
+      await ensureCollabPath(key);
+      await fs.writeFile(key, f.content, { mime: f.mime });
+    } catch (_) {}
+  }
+  myShares.set(path, { id, mime: f.mime, size: f.content.length });
   await sendEnc({
     t: "file_meta",
     id,
@@ -475,13 +614,115 @@ export async function shareFile(path) {
     mime: f.mime,
     size: f.content.length,
     chunks: chunks.length,
+    user: db.getCurrentUser() || "anon",
   });
   for (let i = 0; i < chunks.length; i++) {
     await sendEnc({ t: "file_chunk", id, i, data: chunks[i] });
+    // small yield so UI stays responsive on large files
+    if (i % 8 === 0) await new Promise((r) => setTimeout(r, 0));
   }
-  log(`Shared ${path} (${f.content.length}b, ${chunks.length} chunks)`, "ok");
+  notifyCollabFs();
+  log(`Shared ${path} (${f.content.length}b, ${chunks.length} chunks) → Collab FS`, "ok");
   return id;
 }
+
+async function ensureCollabPath(dest) {
+  const parts = dest.split("/").filter(Boolean);
+  parts.pop();
+  let cur = "";
+  for (const p of parts) {
+    cur += "/" + p;
+    if (!fs.exists(cur)) {
+      try {
+        await fs.mkdir(cur, { parents: true });
+      } catch {
+        try {
+          await fs.mkdir(cur);
+        } catch {}
+      }
+    }
+  }
+}
+
+export async function unshareFile(path) {
+  path = path.startsWith("/") ? path : "/" + path;
+  const meta = myShares.get(path);
+  myShares.delete(path);
+  if (myId) {
+    const key = collabKey(myId, path);
+    sharedFiles.delete(key);
+    try {
+      if (fs.exists(key)) await fs.remove(key);
+    } catch {}
+  }
+  await sendEnc({ t: "share_revoke", path, id: meta?.id });
+  notifyCollabFs();
+  log("Unshared " + path, "ok");
+}
+
+function revokeShared(from, path, id) {
+  if (!path && id) {
+    for (const [k, v] of sharedFiles) {
+      if (v.id === id || (v.from === from && v.id === id)) {
+        sharedFiles.delete(k);
+        try {
+          if (fs.exists(k)) fs.remove(k);
+        } catch {}
+      }
+    }
+  } else if (path) {
+    const key = collabKey(from, path);
+    sharedFiles.delete(key);
+    try {
+      if (fs.exists(key)) fs.remove(key);
+    } catch {}
+    // also remove any matching
+    for (const [k, v] of [...sharedFiles.entries()]) {
+      if (v.from === from && v.path === path) {
+        sharedFiles.delete(k);
+        try {
+          if (fs.exists(k)) fs.remove(k);
+        } catch {}
+      }
+    }
+  }
+  notifyCollabFs();
+  if (window.refreshTree) window.refreshTree();
+  log(`Collab FS removed share from ${from}: ${path || id}`, "out");
+}
+
+/** Open / focus Collab FS (virtual tree of shared files) */
+export function openCollabFs() {
+  notifyCollabFs();
+  if (window.__n3xnOpenCollabFs) window.__n3xnOpenCollabFs();
+  log("Collab FS — " + sharedFiles.size + " shared file(s)", "ok");
+  return listSharedFiles();
+}
+
+function removeSharesFromPeer(peerId) {
+  for (const [k, v] of [...sharedFiles.entries()]) {
+    if (v.from === peerId) {
+      sharedFiles.delete(k);
+      try {
+        if (fs.exists(k)) fs.remove(k);
+      } catch {}
+    }
+  }
+  notifyCollabFs();
+  if (window.refreshTree) window.refreshTree();
+}
+
+export async function announceMyShares() {
+  if (!isConnected() || !myShares.size) return;
+  const files = [...myShares.entries()].map(([path, m]) => ({
+    path,
+    id: m.id,
+    mime: m.mime,
+    size: m.size,
+  }));
+  await sendEnc({ t: "share_list", files });
+}
+
 
 /** Request a path from peers */
 export async function pullFile(path) {
