@@ -164,8 +164,14 @@ export async function chatConnectLocal(room = "global-text") {
 
 export function openChatSidebar() {
   const side = document.getElementById("chat-sidebar");
-  if (!side) return false;
+  if (!side) {
+    console.warn("[n3xn] #chat-sidebar not in DOM");
+    return false;
+  }
   side.classList.remove("collapsed");
+  setSidebarCollapsed(false);
+  side.style.display = "flex";
+  side.style.zIndex = "10000";
   return true;
 }
 
