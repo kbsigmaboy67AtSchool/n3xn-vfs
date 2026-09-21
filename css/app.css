@@ -990,19 +990,121 @@
   resize: vertical;
   box-sizing: border-box;
 }
-.chat-vc-videos {
+.chat-stage {
+  flex: 0 0 auto;
+  max-height: 42vh;
+  overflow: auto;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  background: #05070f;
+  padding: 6px;
+}
+.chat-vc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: start;
+}
+.chat-tile {
+  position: relative;
+  background: #0d111e;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  min-height: 72px;
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
 }
-.n3xn-chat-remote-video {
-  width: 140px;
-  height: 90px;
+.chat-tile.audio-only,
+.chat-tile.idle {
+  aspect-ratio: auto;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 8px;
+  justify-content: flex-start;
+  gap: 6px;
+}
+.chat-tile.talking {
+  border-color: #00f3ff;
+  box-shadow: 0 0 14px rgba(0, 243, 255, 0.45);
+}
+.chat-tile video {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  border-radius: 6px;
   background: #000;
-  border: 1px solid #333;
+  display: block;
 }
+.chat-tile.audio-only video,
+.chat-tile.idle video {
+  display: none !important;
+}
+.chat-tile-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #1a1a28, #00f3ff44);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+  color: #e2e8f0;
+  border: 2px solid #334155;
+}
+.chat-tile.audio-only .chat-tile-avatar,
+.chat-tile.idle .chat-tile-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+  border-width: 1px;
+}
+.chat-tile-name {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  right: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px #000;
+  background: rgba(0,0,0,0.45);
+  border-radius: 4px;
+  padding: 2px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.chat-tile.audio-only .chat-tile-name,
+.chat-tile.idle .chat-tile-name {
+  position: static;
+  background: transparent;
+  text-shadow: none;
+  color: #cbd5e1;
+  padding: 0;
+  flex: 1;
+}
+.chat-tile-badge {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  font-size: 10px;
+  background: rgba(0,0,0,0.5);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.chat-tile.audio-only .chat-tile-badge,
+.chat-tile.idle .chat-tile-badge {
+  position: static;
+}
+.chat-tile.self {
+  border-color: #c084fc66;
+}
+
 /* Floating tab when collapsed so it's obvious */
 .chat-sidebar.collapsed .chat-sidebar-header {
   writing-mode: horizontal-tb;
