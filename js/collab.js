@@ -45,6 +45,7 @@ let lastSentCursor = null; // { path, line, column }
 let cursorHooked = false;
 /** @type {Map<string, object>} */
 const pendingVc = new Map(); // id -> request
+const pendingVid = new Map(); // id -> video request
 /** @type {Map<string, RTCPeerConnection>} */
 const vcPeers = new Map();
 let vcLocalStream = null;
@@ -426,6 +427,17 @@ async function handleAppMessage(msg) {
     case "vc_request":
     case "vc_invite":
       handleVcRequest(from, msg);
+      break;
+    case "vid_request":
+    case "vid_invite":
+      handleVidRequest(from, msg);
+      break;
+    case "vid_accept":
+      await handleVidAccept(from, msg);
+      break;
+    case "vid_reject":
+      log(`[${from}] declined video ${msg.id || ""}`, "out");
+      pendingVid.delete(msg.id);
       break;
     case "vc_accept":
       await handleVcAccept(from, msg);
@@ -1220,7 +1232,7 @@ function shortId(prefix) {
 export function parseRecipients(str) {
   const s = String(str || "").trim();
   if (!s) return [];
-  // split on , or & or && with optional spaces (outside quotes handled by simple strip)
+  if (s === "*" || s.toLowerCase() === "all") return ["*"];
   return s
     .split(/\s*(?:,|&|&&)\s*/)
     .map((x) => x.trim())
@@ -1232,6 +1244,12 @@ function resolvePeerIds(names) {
   const out = [];
   const unknown = [];
   for (const name of names) {
+    if (name === "*" || name.toLowerCase() === "all") {
+      for (const id of peers.keys()) {
+        if (id !== myId) out.push(id);
+      }
+      continue;
+    }
     let found = null;
     if (peers.has(name)) found = name;
     else {
@@ -1505,6 +1523,103 @@ async function createPc(peerId) {
   stream.getTracks().forEach((tr) => pc.addTrack(tr, stream));
   vcPeers.set(peerId, pc);
   return pc;
+}
+
+function handleVidRequest(from, msg) {
+  const id = msg.id || shortId("VID");
+  pendingVid.set(id, {
+    id,
+    from,
+    fromUser: msg.user || peers.get(from)?.user || from,
+    message: msg.message || "",
+    ts: Date.now(),
+  });
+  log(
+    `${msg.user || from} invited you to video chat.\nRequest ID: ${id}\nUse: wss vidaccept ${id}`,
+    "ok"
+  );
+}
+
+export async function vidRequest(recipientStr, message = "") {
+  if (!isConnected()) throw new Error("Not connected");
+  const names = parseRecipients(recipientStr);
+  const { ids, unknown } = resolvePeerIds(names);
+  if (unknown.length && !names.includes("*") && !names.map((n) => n.toLowerCase()).includes("all")) {
+    throw new Error("Unknown collaborator: " + unknown.join(", "));
+  }
+  if (!ids.length) throw new Error("No recipients (no peers in room?)");
+  const id = shortId("VID");
+  await sendEnc({
+    t: "vid_invite",
+    id,
+    to: ids,
+    user: db.getCurrentUser() || "anon",
+    message: String(message || "").slice(0, 200),
+  });
+  log(`Video request sent to ${names.join(", ")}\nRequest ID: ${id}`, "ok");
+  try {
+    // ensure cam+mic via chat module if available
+    const chat = await import("./chat.js");
+    await chat.ensureMedia({ video: true });
+    await chat.setVideo(true);
+  } catch (e) {
+    log("Camera: " + e.message, "err");
+  }
+  return id;
+}
+
+export async function vidAccept(id) {
+  if (!id) {
+    const latest = [...pendingVid.values()].sort((a, b) => b.ts - a.ts)[0];
+    if (!latest) throw new Error("No pending video request found.");
+    id = latest.id;
+  }
+  const req = pendingVid.get(id);
+  if (!req) throw new Error("No pending video request found.");
+  await sendEnc({
+    t: "vid_accept",
+    id,
+    to: req.from,
+    user: db.getCurrentUser() || "anon",
+  });
+  try {
+    const chat = await import("./chat.js");
+    await chat.ensureMedia({ video: true });
+    await chat.setVideo(true);
+    await chat.startVcWith(req.from);
+  } catch (e) {
+    // fallback to collab VC path with video
+    const pc = await createPc(req.from);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: { width: { max: 320 }, height: { max: 240 }, frameRate: { max: 15 } },
+      });
+      stream.getTracks().forEach((tr) => pc.addTrack(tr, stream));
+    } catch (_) {}
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await sendEnc({ t: "vc_signal", to: req.from, kind: "offer", sdp: offer, id });
+  }
+  pendingVid.delete(id);
+  log(`Accepted video ${id} with ${req.fromUser}`, "ok");
+}
+
+async function handleVidAccept(from, msg) {
+  log(`[${from}] accepted video ${msg.id || ""}`, "ok");
+  try {
+    const chat = await import("./chat.js");
+    await chat.ensureMedia({ video: true });
+    await chat.setVideo(true);
+    await chat.startVcWith(from);
+  } catch {
+    const pc = await createPc(from);
+    if (pc.signalingState === "stable") {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await sendEnc({ t: "vc_signal", to: from, kind: "offer", sdp: offer, id: msg.id });
+    }
+  }
 }
 
 export async function vcRequest(recipientStr, message = "") {
