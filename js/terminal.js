@@ -822,15 +822,15 @@ async function cmdWss(args) {
   if (sub === "help" || sub === "-h") {
     print("Encrypted WSS over your CF Universal Relay:");
     print("  wss connect <wss-url> [roomPassword]");
-    print("  wss disconnect");
-    print("  wss status");
-    print("  wss chat <message>");
-    print("  wss share <vfs-path>     — send file to room (chunked E2E)");
-    print("  wss pull <vfs-path>      — request file from peers");
-    print("  wss collab <vfs-path>    — live text collab on file");
-    print("  wss leave                — leave collab session");
-    print("  wss ping");
-    print("Room password encrypts all app traffic; relay only sees ciphertext.");
+    print("  wss disconnect | status | chat <msg> | share <path> | pull <path>");
+    print("  wss collab [path] | leave | ping");
+    print("  wss pmsg <recipients> <markdown…>   — private message (Alice,Bob & Charlie)");
+    print("  wss pmsgimg <recipients> <markdown> — pick up to 4 images then send");
+    print("  wss reply|.r <markdown…>            — reply to last incoming PM");
+    print("  wss vcreq|vcinvite <recipients> [msg] — P2P voice invite (WebRTC)");
+    print("  wss vcaccept [VC-id] | vcmute | vcunmute | vcleave | vcstatus");
+    print("  Recipients: Alice, Bob & Charlie   (comma / & / &&)");
+    print("Room password encrypts ALL app payloads (chat, pmsg, VC signaling, files).");
     return;
   }
 
@@ -890,7 +890,62 @@ async function cmdWss(args) {
     return;
   }
 
-  if (sub === "ping") {
+  
+  if (sub === "pmsg") {
+    if (args.length < 3) throw new Error("Usage: wss pmsg <recipients> <markdown…>");
+    const recipients = args[1];
+    const text = args.slice(2).join(" ");
+    await collab.sendPmsg(recipients, text);
+    return;
+  }
+  if (sub === "pmsgimg" || sub === "pmsg-img") {
+    if (args.length < 2) throw new Error("Usage: wss pmsgimg <recipients> [markdown]");
+    const recipients = args[1];
+    const text = args.slice(2).join(" ") || "";
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "image/*";
+    input.multiple = true;
+    const files = await new Promise((resolve) => {
+      input.onchange = () => resolve([...(input.files || [])]);
+      input.click();
+    });
+    if (files.length > 4) throw new Error("Too many images. Maximum is 4 per message.");
+    const images = [];
+    for (const f of files.slice(0, 4)) {
+      try {
+        images.push(await collab.fileToImageAttachment(f));
+      } catch (e) {
+        print(String(e.message || e), "err");
+      }
+    }
+    if (!images.length && !text) throw new Error("No images attached");
+    await collab.sendPmsg(recipients, text, { images });
+    return;
+  }
+  if (sub === "reply" || sub === ".r" || sub === "r") {
+    const text = args.slice(1).join(" ");
+    if (!text) throw new Error("Usage: wss reply|.r <markdown…>");
+    await collab.replyPmsg(text);
+    return;
+  }
+  if (sub === "vcreq" || sub === "vcinvite" || sub === "vc-req") {
+    if (!args[1]) throw new Error("Usage: wss vcreq <recipients> [message]");
+    await collab.vcRequest(args[1], args.slice(2).join(" "));
+    return;
+  }
+  if (sub === "vcaccept" || sub === "vc-accept") {
+    await collab.vcAccept(args[1] || null);
+    return;
+  }
+  if (sub === "vcmute") { collab.vcMute(); return; }
+  if (sub === "vcunmute") { collab.vcUnmute(); return; }
+  if (sub === "vcleave") { await collab.vcLeave(); return; }
+  if (sub === "vcstatus") {
+    print(JSON.stringify(collab.vcStatus(), null, 2));
+    return;
+  }
+if (sub === "ping") {
     await collab.ping();
     return;
   }
