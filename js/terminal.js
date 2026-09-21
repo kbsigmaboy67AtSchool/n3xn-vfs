@@ -276,6 +276,100 @@ async function run(line) {
       case "jsx":
         await cmdReact(args);
         break;
+      case "grep":
+        await cmdGrep(args);
+        break;
+      case "head":
+        await cmdHead(args);
+        break;
+      case "tail":
+        await cmdTail(args);
+        break;
+      case "wc":
+        await cmdWc(args);
+        break;
+      case "du":
+        await cmdDu(args);
+        break;
+      case "file":
+        await cmdFile(args);
+        break;
+      case "basename":
+        print(basenameArg(args[0] || cwd));
+        break;
+      case "dirname":
+        print(dirnameArg(args[0] || cwd));
+        break;
+      case "which":
+        await cmdWhich(args);
+        break;
+      case "sort":
+        await cmdSort(args);
+        break;
+      case "uniq":
+        await cmdUniq(args);
+        break;
+      case "history":
+        await cmdHistory(args);
+        break;
+      case "alias":
+        await cmdAlias(args);
+        break;
+      case "unalias":
+        if (!args[0]) throw new Error("Usage: unalias <name>");
+        delete aliases[args[0]];
+        await saveAliases();
+        print("Removed alias " + args[0], "ok");
+        break;
+      case "append":
+        await cmdAppend(args, "append");
+        break;
+      case "prepend":
+        await cmdAppend(args, "prepend");
+        break;
+      case "replace":
+        await cmdReplace(args);
+        break;
+      case "insert":
+        await cmdInsert(args);
+        break;
+      case "delete":
+      case "delline":
+        await cmdDelLine(args);
+        break;
+      case "undo":
+        await cmdUndo(args);
+        break;
+      case "redo":
+        await cmdRedo(args);
+        break;
+      case "diff":
+        await cmdDiff(args);
+        break;
+      case "project":
+        await cmdProject(args);
+        break;
+      case "debug":
+        await cmdDebug(args);
+        break;
+      case "web":
+        await cmdWeb(args);
+        break;
+      case "terminal":
+        await cmdTerminalUi(args);
+        break;
+      case "storage":
+      case "idb":
+      case "opfs":
+        await cmdStorage(args);
+        break;
+      case "perf":
+      case "performance":
+        await cmdPerf(args);
+        break;
+      case "nexc":
+        await cmdNexc(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -866,6 +960,9 @@ function showHelp() {
     "  python <file.py> | python -c <code> | python canvas",
     "  gh help|auth|repos|use|pull-tree|commit|pr|issues|storage …",
     "  n3link <path> | n3site run|expand|list|help",
+    "  storage list|use|info|ls|cat|put|rm|meta",
+    "  perf | performance   — memory, quota, device",
+    "  nexc list|run|remote <file.nexc> [module]",
     "  logs on|off|copy|clear  — mirror browser console to terminal",
     "  cmd list|add|rm   — manage custom commands",
     "",
