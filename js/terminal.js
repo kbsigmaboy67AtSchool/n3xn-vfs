@@ -825,7 +825,8 @@ async function cmdWss(args) {
   if (sub === "help" || sub === "-h") {
     print("Encrypted WSS over your CF Universal Relay:");
     print("  wss connect <wss-url> [roomPassword]");
-    print("  wss disconnect | status | chat <msg> | share <path> | pull <path>");
+    print("  wss disconnect | status | chat <msg> | share|unshare <path> | pull <path>");
+    print("  wss collabfs | cfs | shares  — open Collab FS of live shared files");
     print("  wss collab [path] | leave | ping");
     print("  wss pmsg <recipients> <markdown…>   — private message (Alice,Bob & Charlie)");
     print("  wss pmsgimg <recipients> <markdown> — pick up to 4 images then send");
@@ -870,6 +871,18 @@ async function cmdWss(args) {
     const path = resolve(args[1] || window.__n3xnActivePath);
     if (!path) throw new Error("Usage: wss share <path>");
     await collab.shareFile(path);
+    return;
+  }
+  if (sub === "unshare") {
+    const path = resolve(args[1] || window.__n3xnActivePath);
+    if (!path) throw new Error("Usage: wss unshare <path>");
+    await collab.unshareFile(path);
+    return;
+  }
+  if (sub === "collabfs" || sub === "cfs" || sub === "shares") {
+    const list = collab.openCollabFs();
+    if (!list.length) print("(no shared files in Collab FS)");
+    else list.forEach((f) => print(`${f.status.padEnd(10)} ${f.key}  (${f.size || 0}b)`));
     return;
   }
 
