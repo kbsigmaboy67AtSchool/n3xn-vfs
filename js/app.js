@@ -208,7 +208,84 @@ async function bootApp() {
 
 // ========== FILE TREE ==========
 
+let collabFsMode = false;
+
+function renderCollabFsList(list) {
+  const container = document.getElementById("file-tree");
+  if (!container || !collabFsMode) return;
+  container.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "tree-item";
+  header.style.opacity = "0.85";
+  header.innerHTML = `<span class="icon">🔗</span><span class="name">Collab FS (${list.length})</span>`;
+  container.appendChild(header);
+  const back = document.createElement("div");
+  back.className = "tree-item";
+  back.innerHTML = `<span class="icon">←</span><span class="name">Back to local VFS</span>`;
+  back.onclick = () => {
+    collabFsMode = false;
+    refreshTree();
+  };
+  container.appendChild(back);
+  if (!list.length) {
+    const empty = document.createElement("div");
+    empty.className = "tree-empty";
+    empty.innerHTML = `<p>No shared files yet</p><p class="hint">wss share /path · peers' shares appear when streaming completes</p>`;
+    container.appendChild(empty);
+    return;
+  }
+  for (const f of list) {
+    const item = document.createElement("div");
+    item.className = "tree-item";
+    const st =
+      f.status === "streaming"
+        ? "… "
+        : f.status === "announced"
+          ? "📡 "
+          : "";
+    item.innerHTML = `<span class="icon">📄</span><span class="name">${st}${escapeTree(f.key)}</span>`;
+    item.title = `${f.fromUser || f.from} · ${f.mime || ""} · ${f.size || 0}b · ${f.status}`;
+    item.onclick = async () => {
+      document.querySelectorAll(".tree-item").forEach((el) => el.classList.remove("active"));
+      item.classList.add("active");
+      document.getElementById("current-path").textContent = f.key;
+      if (f.status === "announced") {
+        setStatus("Announced only — request: wss pull " + f.path);
+        return;
+      }
+      if (f.status === "streaming") {
+        setStatus("Still receiving chunks…");
+        return;
+      }
+      try {
+        await ed.openFile(f.key);
+      } catch (e) {
+        setStatus("Open failed: " + e.message);
+      }
+    };
+    container.appendChild(item);
+  }
+}
+
+window.__n3xnRefreshCollabFs = (list) => {
+  if (collabFsMode) renderCollabFsList(list || []);
+};
+
+window.__n3xnOpenCollabFs = () => {
+  collabFsMode = true;
+  import("./collab.js").then((c) => {
+    renderCollabFsList(c.listSharedFiles());
+  }).catch(() => renderCollabFsList([]));
+};
+
 async function refreshTree() {
+  if (collabFsMode) {
+    import("./collab.js")
+      .then((c) => renderCollabFsList(c.listSharedFiles()))
+      .catch(() => renderCollabFsList([]));
+    return;
+  }
+
   const container = document.getElementById("file-tree");
   if (!container) return;
   container.innerHTML = "";
@@ -307,6 +384,19 @@ function escapeTree(s) {
 }
 
 // ========== SIDEBAR ACTIONS ==========
+
+document.getElementById("btn-collab-fs")?.addEventListener("click", async () => {
+  try {
+    const collab = await import("./collab.js");
+    if (!collab.isConnected()) {
+      setStatus("Connect WSS first: wss connect <url> <password>");
+      return;
+    }
+    collab.openCollabFs();
+  } catch (e) {
+    setStatus(String(e.message || e));
+  }
+});
 
 document.getElementById("btn-new-file").onclick = async () => {
   const name = prompt("File name (relative to current path):");
