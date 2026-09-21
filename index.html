@@ -227,11 +227,13 @@
         <button type="button" id="btn-chat-join" class="btn">Join</button>
         <button type="button" id="btn-chat-leave" class="btn">Leave</button>
       </div>
-      <div id="chat-peers" class="chat-peers"></div>
-      <div id="chat-vc-videos" class="chat-vc-videos"></div>
+      <div id="chat-peers" class="chat-peers" hidden></div>
       <div class="chat-vc-actions">
-        <button type="button" id="btn-vc-join" class="btn">Join VC mesh</button>
-        <button type="button" id="btn-vc-video" class="btn">Video on/off</button>
+        <button type="button" id="btn-vc-join" class="btn">Join call</button>
+        <button type="button" id="btn-vc-video" class="btn">Camera</button>
+      </div>
+      <div id="chat-stage" class="chat-stage">
+        <div id="chat-vc-videos" class="chat-vc-grid" aria-label="Call participants"></div>
       </div>
       <div id="chat-messages" class="chat-messages"></div>
       <div class="chat-compose">
