@@ -252,9 +252,6 @@ async function run(line) {
       case "share":
         await cmdWss(["share", ...args]);
         break;
-      case "chat":
-        await cmdWss(["chat", ...args]);
-        break;
       case "python":
       case "py":
         await cmdPython(args);
@@ -375,6 +372,10 @@ async function run(line) {
         break;
       case "lang":
         await cmdLang(args);
+        break;
+      case "chat":
+      case "sidebar":
+        await cmdChatEngine(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -832,9 +833,10 @@ async function cmdWss(args) {
     print("  wss pmsg <recipients> <markdown…>   — private message (Alice,Bob & Charlie)");
     print("  wss pmsgimg <recipients> <markdown> — pick up to 4 images then send");
     print("  wss reply|.r <markdown…>            — reply to last incoming PM");
-    print("  wss vcreq|vcinvite <recipients> [msg] — P2P voice invite (WebRTC)");
-    print("  wss vcaccept [VC-id] | vcmute | vcunmute | vcleave | vcstatus");
-    print("  Recipients: Alice, Bob & Charlie   (comma / & / &&)");
+    print("  wss vcreq|vcinvite <recipients> [msg] — P2P voice invite");
+    print("  wss vidreq|vidinvite <recipients> [msg] — P2P video invite");
+    print("  wss vcaccept|vidaccept [id] | vcmute|vcunmute | vcleave | vcstatus");
+    print("  Recipients: Alice, Bob & Charlie | * | all");
     print("Room password encrypts ALL app payloads (chat, pmsg, VC signaling, files).");
     return;
   }
@@ -1045,7 +1047,8 @@ function showHelp(args) {
     [
       "n3xn help — page 3/3 (collab / WSS)",
       "  wss connect|disconnect|status|chat|share|pull|collab",
-      "  wss pmsg|pmsgimg|reply|.r | vcreq|vcaccept|vcmute|vcleave",
+      "  wss pmsg|… | vcreq|vidreq|vcaccept|vidaccept (*|all ok)",
+    "  chat open|local|join|send|mic|video|vc  — sidebar chat engine",
       "  gh …  | logs on|off|copy",
       "  In-file config: //!n3xn display=terminal run=main.lua files=a.lua,b.lua",
       "  Compiled langs: place sibling .wasm to execute in-browser",
@@ -2209,4 +2212,95 @@ async function cmdLang(args) {
     lang: lang || undefined,
     log: (m, c) => print(m, c || "out"),
   });
+}
+
+
+async function cmdChatEngine(args) {
+  const chat = await import("./chat.js");
+  const sub = (args[0] || "open").toLowerCase();
+  if (sub === "help" || sub === "-h") {
+    print("chat / sidebar — full chat engine (text, VC, video, rooms)");
+    print("  chat open | close | toggle     — sidebar");
+    print("  chat local [room]              — BroadcastChannel, no WSS");
+    print("  chat join <relayBase> [room]   — public encrypted rooms");
+    print("  chat leave | send <msg> | rooms | peers | status");
+    print("  chat mic | video               — toggle");
+    print("  chat vc                        — join VC mesh with peers");
+    print("Rooms: global-text | global-vc | global-hangout");
+    print("Works without Collab; better with WSS + wss vidreq/vcreq");
+    return;
+  }
+  if (sub === "open") {
+    chat.openChatSidebar();
+    print("Chat sidebar open", "ok");
+    return;
+  }
+  if (sub === "close") {
+    chat.closeChatSidebar();
+    return;
+  }
+  if (sub === "toggle") {
+    const on = chat.toggleChatSidebar();
+    print(on ? "Sidebar open" : "Sidebar closed", "ok");
+    return;
+  }
+  if (sub === "local") {
+    const room = args[1] || "global-text";
+    chat.setChatHandlers({
+      log: (m, c) => print(m, c || "out"),
+      message: () => {},
+      presence: () => {},
+    });
+    await chat.chatConnectLocal(room);
+    chat.openChatSidebar();
+    print("Local room " + room + " — open another tab to chat", "ok");
+    return;
+  }
+  if (sub === "join") {
+    const relay = args[1];
+    const room = args[2] || "global-text";
+    if (!relay) throw new Error("Usage: chat join <wss-relay-base> [room]");
+    chat.setChatHandlers({
+      log: (m, c) => print(m, c || "out"),
+      message: () => {},
+      presence: () => {},
+    });
+    await chat.chatConnect(relay, room);
+    chat.openChatSidebar();
+    return;
+  }
+  if (sub === "leave") {
+    await chat.chatDisconnect();
+    return;
+  }
+  if (sub === "send") {
+    await chat.sendChat(args.slice(1).join(" "));
+    return;
+  }
+  if (sub === "rooms") {
+    chat.getPublicRooms().forEach((r) => print(`${r.id} — ${r.name} (${r.kind})`));
+    return;
+  }
+  if (sub === "peers" || sub === "status") {
+    print(JSON.stringify(chat.getChatStatus(), null, 2));
+    return;
+  }
+  if (sub === "mic") {
+    const on = await chat.toggleMic();
+    print(on ? "Mic on" : "Mic off", "ok");
+    return;
+  }
+  if (sub === "video") {
+    const st = chat.getChatStatus();
+    await chat.setVideo(!st.video);
+    print((!st.video ? "Video on" : "Video off"), "ok");
+    return;
+  }
+  if (sub === "vc") {
+    await chat.joinVcMesh();
+    return;
+  }
+  // default open
+  chat.openChatSidebar();
+  print("Chat sidebar open — try: chat help", "ok");
 }
