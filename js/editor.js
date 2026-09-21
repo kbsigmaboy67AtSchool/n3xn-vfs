@@ -479,3 +479,37 @@ function setStatus(msg) {
   const el = document.getElementById("status-msg");
   if (el) el.textContent = msg;
 }
+
+
+/** Open bytes in Monaco without requiring a VFS path write */
+export async function openMemoryFile(path, bytes, mime) {
+  await initEditor();
+  const text =
+    typeof bytes === "string"
+      ? bytes
+      : new TextDecoder().decode(bytes);
+  window.__n3xnActivePath = path;
+  if (editor) {
+    const model = monaco.editor.createModel(
+      text,
+      (mime || "").includes("json")
+        ? "json"
+        : path.endsWith(".js")
+          ? "javascript"
+          : path.endsWith(".css")
+            ? "css"
+            : path.endsWith(".html")
+              ? "html"
+              : "plaintext"
+    );
+    editor.setModel(model);
+  }
+  try {
+    document.getElementById("current-path").textContent = path;
+  } catch {}
+  return path;
+}
+
+if (typeof window !== "undefined") {
+  window.__n3xnOpenMemoryFile = openMemoryFile;
+}
