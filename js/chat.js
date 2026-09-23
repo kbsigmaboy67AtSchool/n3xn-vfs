@@ -584,8 +584,19 @@ function ensurePeer(id, name, initiator) {
 
   pc.onnegotiationneeded = async () => {
     try {
+      // Perfect negotiation: only one side creates offers when stable
+      if (entry.makingOffer) return;
+      if (pc.signalingState !== "stable" && pc.signalingState !== "have-local-offer") {
+        // avoid m-line order errors on glare / mid-renegotiation
+        return;
+      }
       entry.makingOffer = true;
-      await pc.setLocalDescription(await pc.createOffer());
+      const offer = await pc.createOffer();
+      // Glare check after await
+      if (pc.signalingState !== "stable" && pc.signalingState !== "have-local-offer") {
+        return;
+      }
+      await pc.setLocalDescription(offer);
       await sendEnc({
         t: "signal",
         id: myId,
@@ -601,22 +612,10 @@ function ensurePeer(id, name, initiator) {
     }
   };
 
-  if (initiator) {
-    pc.createOffer()
-      .then((o) => pc.setLocalDescription(o))
-      .then(() =>
-        sendEnc({
-          t: "signal",
-          id: myId,
-          to: id,
-          u: db.getCurrentUser() || "anon",
-          kind: "offer",
-          payload: pc.localDescription,
-        })
-      )
-      .catch(console.error);
-  }
+  // Initiator: kick negotiation once via onnegotiationneeded (addTrack already queued it).
+  // Do NOT double-createOffer — that causes m-line order InvalidAccessError.
 }
+
 
 async function handleSignal(data) {
   if (!inCall || !localStream) return;
@@ -632,6 +631,9 @@ async function handleSignal(data) {
       const offerCollision = entry.makingOffer || pc.signalingState !== "stable";
       entry.ignoreOffer = !entry.polite && offerCollision;
       if (entry.ignoreOffer) return;
+      if (pc.signalingState === "have-local-offer" && entry.polite) {
+        try { await pc.setLocalDescription({ type: "rollback" }); } catch (_) {}
+      }
       await pc.setRemoteDescription(data.payload);
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
