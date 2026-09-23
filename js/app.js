@@ -1124,3 +1124,15 @@ const _bootApp = typeof bootApp === "function" ? bootApp : null;
 import("./n3xn-devtools.js")
   .then((dt) => dt.mountHostDevtools())
   .catch((e) => console.warn("[n3xn] devtools", e));
+
+window.__n3xnRunXdebug = async (path) => {
+  try {
+    const xd = await import("./xdebug.js");
+    const r = await xd.xdebugPath(path || window.__n3xnActivePath, { live: false });
+    console.info("[n3xn xdebug]", xd.formatReport?.(r, path) || r);
+    return r;
+  } catch (e) {
+    console.error(e);
+    throw e;
+  }
+};
