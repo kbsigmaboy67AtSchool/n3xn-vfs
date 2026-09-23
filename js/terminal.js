@@ -2334,12 +2334,13 @@ async function cmdChatEngine(args) {
 async function cmdDevtools(args) {
   const dt = await import("./n3xn-devtools.js");
   const sub = (args[0] || "open").toLowerCase();
-  if (sub === "help") {
-    print("devtools | dt — n3xn DevTools");
-    print("  devtools open | close | toggle");
-    print("  Floating n3 button (bottom-right, draggable) also opens the panel.");
-    print("  Tabs: Console, Network, Elements, Application, Sources, Perf, WSS, Monaco, xdebug");
-    print("  HTML blob runs auto-inject the same DevTools into the opened page.");
+  if (sub === "help" || sub === "-h") {
+    print("devtools | dt — n3xn DevTools (ChromeOS-style dock)");
+    print("  devtools open | close");
+    print("  devtools install <path|dir|all> [,path2…]   — embed into HTML files");
+    print("  devtools install-inline <path|dir|all>      — fully inline script (offline blobs)");
+    print("  F12 / Ctrl+Shift+I also toggles. No password.");
+    print("  Tabs: Elements, Console, Sources, Network, Application, Clicker, Persist, Settings");
     return;
   }
   if (sub === "close") {
@@ -2347,7 +2348,23 @@ async function cmdDevtools(args) {
     print("DevTools closed", "ok");
     return;
   }
+  if (sub === "install" || sub === "install-inline" || sub === "inject") {
+    const inline = sub === "install-inline" || args.includes("--inline");
+    const rest = args.slice(1).filter((a) => a !== "--inline").join(" ");
+    const targets = dt.parseInstallTargets(rest || "all", cwd);
+    // resolve relative
+    const resolved = targets.map((p) => (p.startsWith("/") ? p : resolve(p)));
+    print("Installing DevTools into: " + resolved.join(", ") + (inline ? " (inline)" : ""), "out");
+    const results = await dt.installToVfs(resolved, { inline, recursive: true });
+    for (const r of results) {
+      if (r.skipped) print("  skip " + r.path + " (" + (r.note || "") + ")");
+      else if (r.ok) print("  ok   " + r.path, "ok");
+      else print("  fail " + r.path + " — " + (r.error || ""), "err");
+    }
+    print("Done: " + results.filter((x) => x.ok && !x.skipped).length + " installed", "ok");
+    return;
+  }
   dt.mountHostDevtools();
   dt.openDevtools();
-  print("n3xn DevTools open", "ok");
+  print("n3xn DevTools open (F12)", "ok");
 }
