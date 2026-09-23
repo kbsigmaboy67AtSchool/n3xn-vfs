@@ -1,5 +1,5 @@
 /* n3xn VFS service worker — Monaco same-origin proxy + app shell */
-const SHELL = "n3xn-shell-v5";
+const SHELL = "n3xn-shell-v6";
 const MONACO = "n3xn-monaco-v3";
 const PREFIX = "/__monaco__/";
 const CDN = "https://cdn.jsdelivr.net/";
@@ -30,20 +30,15 @@ const SHELL_URLS = [
 ];
 
 const MONACO_CORE = [
-  // Core Worker & Main Scripts
   "npm/" + VER + "/min/vs/loader.js",
   "npm/" + VER + "/min/vs/editor/editor.main.js",
   "npm/" + VER + "/min/vs/editor/editor.main.css",
   "npm/" + VER + "/min/vs/editor/editor.main.nls.js",
   "npm/" + VER + "/min/vs/base/worker/workerMain.js",
-
-  // Rich Language Workers (Full Intellisense / Diagnostics)
   "npm/" + VER + "/min/vs/language/html/htmlWorker.js",
   "npm/" + VER + "/min/vs/language/css/cssWorker.js",
   "npm/" + VER + "/min/vs/language/json/jsonWorker.js",
   "npm/" + VER + "/min/vs/language/typescript/tsWorker.js",
-
-  // Basic Languages (Syntax Highlighting)
   "npm/" + VER + "/min/vs/basic-languages/javascript/javascript.js",
   "npm/" + VER + "/min/vs/basic-languages/typescript/typescript.js",
   "npm/" + VER + "/min/vs/basic-languages/html/html.js",
@@ -149,13 +144,27 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
+  // Serve V0RT3X_chat.html directly from SW Cache (bypasses server index.html fallback)
+  if (url.origin === self.location.origin && url.pathname === "/V0RT3X_chat.html") {
+    event.respondWith(
+      caches.open(SHELL).then(async (cache) => {
+        const hit = await cache.match(req) || await cache.match("/V0RT3X_chat.html");
+        if (hit) return hit;
+
+        await warmVortexChat();
+        return (await cache.match("/V0RT3X_chat.html")) || cache.match("./index.html");
+      })
+    );
+    return;
+  }
+
   // Same-origin Monaco proxy
   if (url.origin === self.location.origin && url.pathname.startsWith(PREFIX)) {
     event.respondWith(monacoProxy(req, url));
     return;
   }
 
-  // Direct CDN monaco → cache + serve (helps first paint)
+  // Direct CDN monaco → cache + serve
   if (
     url.hostname === "cdn.jsdelivr.net" &&
     url.pathname.includes("monaco-editor")
@@ -166,7 +175,7 @@ self.addEventListener("fetch", (event) => {
 
   if (url.origin !== self.location.origin) return;
 
-  // Never treat non-JS as JS: if someone requests /sw.js and gets HTML, don't cache as shell forever
+  // Protect sw.js
   if (url.pathname.endsWith("/sw.js") || url.pathname === "/sw.js") {
     event.respondWith(
       fetch(req).then(async (res) => {
@@ -193,7 +202,6 @@ self.addEventListener("fetch", (event) => {
         const hit = await cache.match(req);
         if (hit) return hit;
 
-        // Only fallback to index.html for page navigations, not missing JS/CSS assets
         if (req.mode === "navigate" || req.headers.get("Accept")?.includes("text/html")) {
           return cache.match("./index.html");
         }
