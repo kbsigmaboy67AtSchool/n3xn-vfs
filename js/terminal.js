@@ -413,16 +413,27 @@ function parseArgs(line) {
 }
 
 function resolve(path) {
-  if (!path) return cwd;
-  if (path.startsWith("/")) return path;
-  if (path === "..") {
-    if (cwd === "/") return "/";
-    const parts = cwd.split("/").filter(Boolean);
-    parts.pop();
-    return "/" + parts.join("/") || "/";
+  if (!path) return cwd || "/";
+  let raw = String(path).replace(/\\/g, "/").trim();
+  if (!raw) return cwd || "/";
+  // absolute
+  let parts;
+  if (raw.startsWith("/")) {
+    parts = raw.split("/").filter(Boolean);
+  } else {
+    const base = (cwd || "/").split("/").filter(Boolean);
+    parts = base.concat(raw.split("/").filter(Boolean));
   }
-  if (path.startsWith("./")) path = path.slice(2);
-  return cwd === "/" ? "/" + path : cwd + "/" + path;
+  const out = [];
+  for (const seg of parts) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") {
+      if (out.length) out.pop();
+      continue;
+    }
+    out.push(seg);
+  }
+  return "/" + out.join("/");
 }
 
 async function cmdCd(path) {
@@ -483,11 +494,21 @@ async function cmdTouch(args) {
   for (const a of args) {
     if (a.startsWith("-")) continue;
     const p = resolve(a);
+    if (p === "/") throw new Error("Cannot touch root");
     if (!fs.exists(p)) {
       await fs.writeFile(p, "");
       print("Created: " + p, "ok");
+    } else if (fs.isDir(p)) {
+      print("Directory exists: " + p);
     } else {
-      print("Exists: " + p);
+      // update mtime via rewrite
+      try {
+        const f = await fs.readFile(p);
+        await fs.writeFile(p, f.content, { mime: f.mime });
+      } catch {
+        await fs.writeFile(p, "");
+      }
+      print("Touched: " + p, "ok");
     }
   }
 }
