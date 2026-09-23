@@ -1,12 +1,22 @@
 /*
   Cache-Control: no-transform
+  X-Content-Type-Options: nosniff
+
+/*.html
+  Cache-Control: no-cache, no-transform
+
+/css/*
+  Content-Type: text/css; charset=utf-8
+  Cache-Control: no-transform
 
 /js/*
   Content-Type: application/javascript; charset=utf-8
   X-Content-Type-Options: nosniff
+  Cache-Control: no-transform
 
 /*.js
   Content-Type: application/javascript; charset=utf-8
+  Cache-Control: no-transform
 
 /sw.js
   Content-Type: application/javascript; charset=utf-8
@@ -15,16 +25,22 @@
 
 /manifest.webmanifest
   Content-Type: application/manifest+json; charset=utf-8
+  Cache-Control: no-transform
 
 /__monaco__/*
-  Cache-Control: public, max-age=31536000
+  Cache-Control: public, max-age=31536000, no-transform
 
 /icons/*
-  Cache-Control: public, max-age=86400
+  Cache-Control: public, max-age=86400, no-transform
 
 /icons/*.png
   Content-Type: image/png
+  Cache-Control: public, max-age=86400, no-transform
 
 /devtools.js
   Content-Type: application/javascript; charset=utf-8
+  Cache-Control: no-cache, no-transform
+
+/devtools.css
+  Content-Type: text/css; charset=utf-8
   Cache-Control: no-cache, no-transform
