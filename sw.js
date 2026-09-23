@@ -23,24 +23,40 @@ const SHELL_URLS = [
 ];
 
 const MONACO_CORE = [
+  // Core Worker & Main Scripts
   "npm/" + VER + "/min/vs/loader.js",
   "npm/" + VER + "/min/vs/editor/editor.main.js",
   "npm/" + VER + "/min/vs/editor/editor.main.css",
   "npm/" + VER + "/min/vs/editor/editor.main.nls.js",
   "npm/" + VER + "/min/vs/base/worker/workerMain.js",
+
+  // Rich Language Workers (Full Intellisense / Diagnostics)
   "npm/" + VER + "/min/vs/language/html/htmlWorker.js",
   "npm/" + VER + "/min/vs/language/css/cssWorker.js",
   "npm/" + VER + "/min/vs/language/json/jsonWorker.js",
   "npm/" + VER + "/min/vs/language/typescript/tsWorker.js",
+
+  // Basic Languages (Syntax Highlighting)
   "npm/" + VER + "/min/vs/basic-languages/javascript/javascript.js",
+  "npm/" + VER + "/min/vs/basic-languages/typescript/typescript.js",
   "npm/" + VER + "/min/vs/basic-languages/html/html.js",
   "npm/" + VER + "/min/vs/basic-languages/css/css.js",
+  "npm/" + VER + "/min/vs/basic-languages/scss/scss.js",
+  "npm/" + VER + "/min/vs/basic-languages/json/json.js",
   "npm/" + VER + "/min/vs/basic-languages/python/python.js",
   "npm/" + VER + "/min/vs/basic-languages/markdown/markdown.js",
   "npm/" + VER + "/min/vs/basic-languages/shell/shell.js",
-  "npm/" + VER + "/min/vs/basic-languages/json/json.js",
+  "npm/" + VER + "/min/vs/basic-languages/cpp/cpp.js",
+  "npm/" + VER + "/min/vs/basic-languages/csharp/csharp.js",
+  "npm/" + VER + "/min/vs/basic-languages/java/java.js",
+  "npm/" + VER + "/min/vs/basic-languages/go/go.js",
+  "npm/" + VER + "/min/vs/basic-languages/rust/rust.js",
+  "npm/" + VER + "/min/vs/basic-languages/php/php.js",
+  "npm/" + VER + "/min/vs/basic-languages/xml/xml.js",
+  "npm/" + VER + "/min/vs/basic-languages/yaml/yaml.js",
+  "npm/" + VER + "/min/vs/basic-languages/sql/sql.js",
+  "npm/" + VER + "/min/vs/basic-languages/dockerfile/dockerfile.js",
 ];
-
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
