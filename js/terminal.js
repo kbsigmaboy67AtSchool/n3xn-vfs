@@ -377,6 +377,10 @@ async function run(line) {
       case "sidebar":
         await cmdChatEngine(args);
         break;
+      case "devtools":
+      case "dt":
+        await cmdDevtools(args);
+        break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
     }
@@ -2324,4 +2328,26 @@ async function cmdChatEngine(args) {
   // default open
   chat.openChatSidebar();
   print("Chat sidebar open — try: chat help", "ok");
+}
+
+
+async function cmdDevtools(args) {
+  const dt = await import("./n3xn-devtools.js");
+  const sub = (args[0] || "open").toLowerCase();
+  if (sub === "help") {
+    print("devtools | dt — n3xn DevTools");
+    print("  devtools open | close | toggle");
+    print("  Floating n3 button (bottom-right, draggable) also opens the panel.");
+    print("  Tabs: Console, Network, Elements, Application, Sources, Perf, WSS, Monaco, xdebug");
+    print("  HTML blob runs auto-inject the same DevTools into the opened page.");
+    return;
+  }
+  if (sub === "close") {
+    dt.closeDevtools();
+    print("DevTools closed", "ok");
+    return;
+  }
+  dt.mountHostDevtools();
+  dt.openDevtools();
+  print("n3xn DevTools open", "ok");
 }
