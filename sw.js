@@ -1,16 +1,20 @@
 /* n3xn VFS service worker — Monaco same-origin proxy + app shell */
-const SHELL = "n3xn-shell-v3";
+const SHELL = "n3xn-shell-v5";
 const MONACO = "n3xn-monaco-v3";
 const PREFIX = "/__monaco__/";
 const CDN = "https://cdn.jsdelivr.net/";
 const VER = "monaco-editor@0.52.0";
 
+const VORTEX_GITHUB_URL = "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
+
 const SHELL_URLS = [
   "./",
   "./index.html",
+  "./V0RT3X_chat.html",
   "./manifest.webmanifest",
   "./css/theme.css",
   "./css/app.css",
+  "./css/devtools.css",
   "./js/app.js",
   "./js/db.js",
   "./js/crypto.js",
@@ -18,12 +22,11 @@ const SHELL_URLS = [
   "./js/editor.js",
   "./js/terminal.js",
   "./js/runner.js",
-  "./icons/icon-192.png",
-  "./icons/icon-512.png",
   "./js/devtools.js",
   "./devtools.js",
-  "./css/devtools.css",
-  "./devtools.css"
+  "./devtools.css",
+  "./icons/icon-192.png",
+  "./icons/icon-512.png",
 ];
 
 const MONACO_CORE = [
@@ -61,6 +64,7 @@ const MONACO_CORE = [
   "npm/" + VER + "/min/vs/basic-languages/sql/sql.js",
   "npm/" + VER + "/min/vs/basic-languages/dockerfile/dockerfile.js",
 ];
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -69,6 +73,7 @@ self.addEventListener("install", (event) => {
         SHELL_URLS.map((u) => cache.add(u).catch(() => null))
       );
       await warmMonaco();
+      await warmVortexChat();
       await self.skipWaiting();
     })()
   );
@@ -121,6 +126,24 @@ async function warmMonaco() {
   );
 }
 
+async function warmVortexChat() {
+  const cache = await caches.open(SHELL);
+  try {
+    const res = await fetch(VORTEX_GITHUB_URL, { mode: "cors" });
+    if (!res.ok) return;
+
+    const buf = await res.arrayBuffer();
+    const htmlResponse = new Response(buf, {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+
+    await cache.put(self.location.origin + "/V0RT3X_chat.html", htmlResponse);
+  } catch (err) {
+    console.error("Failed to fetch V0RT3X_chat.html from GitHub:", err);
+  }
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
@@ -168,7 +191,17 @@ self.addEventListener("fetch", (event) => {
         return net;
       } catch {
         const hit = await cache.match(req);
-        return hit || cache.match("./index.html");
+        if (hit) return hit;
+
+        // Only fallback to index.html for page navigations, not missing JS/CSS assets
+        if (req.mode === "navigate" || req.headers.get("Accept")?.includes("text/html")) {
+          return cache.match("./index.html");
+        }
+
+        return new Response("/* Asset unavailable offline */", {
+          status: 503,
+          headers: { "Content-Type": "application/javascript" },
+        });
       }
     })
   );
