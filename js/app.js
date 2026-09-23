@@ -1119,3 +1119,8 @@ const _bootApp = typeof bootApp === "function" ? bootApp : null;
     setStatus(videoOn ? "Video on" : "Video off");
   });
 })();
+
+
+import("./n3xn-devtools.js")
+  .then((dt) => dt.mountHostDevtools())
+  .catch((e) => console.warn("[n3xn] devtools", e));
