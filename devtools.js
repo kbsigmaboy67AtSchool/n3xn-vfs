@@ -377,9 +377,7 @@ async function authenticate() {
 
       // Apply n3xn monaco-settings if host exported them
       try {
-        if (typeof window.__n3xnApplyMonacoSettings === "function") {
-          window.__n3xnApplyMonacoSettings(editor);
-        }
+        await applyMonacoFromN3xn(editor);
       } catch (_) {}
 
       // ResizeObserver keeps Monaco correct when dock is resized
@@ -397,6 +395,122 @@ async function authenticate() {
       return fallback;
     }
   }
+
+
+  /* ── Exclude DevTools chrome from page inspection ── */
+
+  function isDevtoolsNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    try {
+      if (node.id && (String(node.id).indexOf("__n3xn_") === 0 || node.id === `${NS}root` || node.id === `${NS}css`)) return true;
+      if (node.className && typeof node.className === "string") {
+        if (node.className.indexOf("__n3xn_") >= 0) return true;
+      }
+      if (highlightEl && (node === highlightEl || highlightEl.contains(node))) return true;
+      if (root && (node === root || root.contains(node))) return true;
+      // also hide injected style/script markers
+      if (node.getAttribute && node.getAttribute("data-n3xn-devtools")) return true;
+    } catch (_) {}
+    return false;
+  }
+
+  function pageChildNodes(node) {
+    return Array.from(node.childNodes || []).filter((n) => {
+      if (n.nodeType === 1 && isDevtoolsNode(n)) return false;
+      return !!nodeLabel(n);
+    });
+  }
+
+  /** Serialize page HTML without DevTools root / highlight / injected markers */
+  function pageHtmlSnapshot() {
+    try {
+      const clone = document.documentElement.cloneNode(true);
+      clone.querySelectorAll(
+        `[id^="__n3xn_"], [class*="__n3xn_"], [data-n3xn-devtools], script[data-n3xn-devtools-host], link[data-n3xn-devtools]`
+      ).forEach((n) => n.remove());
+      // strip open class push
+      clone.classList.remove("n3xn-dt-open");
+      clone.style.removeProperty("--n3xn-dt-height");
+      return "<!DOCTYPE html>\n" + clone.outerHTML;
+    } catch (e) {
+      return document.documentElement.outerHTML;
+    }
+  }
+
+  async function loadN3xnMonacoSettings() {
+    // Prefer live host export
+    try {
+      if (window.__n3xnMonacoSettings) return window.__n3xnMonacoSettings;
+    } catch {}
+    // IDB: n3xn often stores under account DBs — try common keys
+    const tryDb = async (name, store, key) => {
+      try {
+        const db = await new Promise((resolve, reject) => {
+          const r = indexedDB.open(name);
+          r.onsuccess = () => resolve(r.result);
+          r.onerror = () => reject(r.error);
+          r.onupgradeneeded = () => {};
+        });
+        if (!db.objectStoreNames.contains(store)) {
+          db.close();
+          return null;
+        }
+        const val = await new Promise((resolve, reject) => {
+          const tx = db.transaction(store, "readonly");
+          const req = tx.objectStore(store).get(key);
+          req.onsuccess = () => resolve(req.result);
+          req.onerror = () => reject(req.error);
+        });
+        db.close();
+        return val;
+      } catch {
+        return null;
+      }
+    };
+    // Known n3xn patterns
+    for (const [name, store, key] of [
+      ["n3xn_monaco_settings", "settings", "default"],
+      ["n3xn_vfs", "kv", "monaco-settings"],
+      ["n3xn", "settings", "monaco"],
+    ]) {
+      const v = await tryDb(name, store, key);
+      if (v) return v;
+    }
+    // localStorage fallback
+    try {
+      const raw = localStorage.getItem("n3xn-monaco-settings") || localStorage.getItem("n3xn_monaco_settings");
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }
+
+  async function applyMonacoFromN3xn(ed) {
+    try {
+      if (typeof window.__n3xnApplyMonacoSettings === "function") {
+        window.__n3xnApplyMonacoSettings(ed);
+        return;
+      }
+      const s = await loadN3xnMonacoSettings();
+      if (!s || !ed || !window.monaco) return;
+      if (s.theme) window.monaco.editor.setTheme(s.theme);
+      const opts = s.options || s;
+      if (opts && typeof opts === "object") {
+        const allow = [
+          "fontSize", "fontFamily", "lineNumbers", "minimap", "wordWrap",
+          "tabSize", "insertSpaces", "cursorStyle", "cursorBlinking",
+          "renderWhitespace", "smoothScrolling", "mouseWheelZoom",
+        ];
+        const patch = {};
+        for (const k of allow) {
+          if (opts[k] !== undefined) patch[k] = opts[k];
+        }
+        if (Object.keys(patch).length) ed.updateOptions(patch);
+      }
+    } catch (err) {
+      console.warn("n3xn monaco settings", err);
+    }
+  }
+
 
   /* ── Highlight ── */
 
@@ -446,6 +560,7 @@ async function authenticate() {
   }
 
   function buildTreeNode(domNode, depth = 0) {
+    if (domNode && domNode.nodeType === 1 && isDevtoolsNode(domNode)) return null;
     const info = nodeLabel(domNode);
     if (!info) return null;
 
@@ -456,7 +571,7 @@ async function authenticate() {
     const label = el("span");
 
     if (info.kind === "element") {
-      const kids = Array.from(domNode.childNodes).filter((n) => nodeLabel(n));
+      const kids = pageChildNodes(domNode);
       if (kids.length) {
         toggle.textContent = depth < 2 ? "▾" : "▸";
         toggle.onclick = (e) => {
@@ -506,7 +621,7 @@ async function authenticate() {
     wrap.appendChild(row);
 
     if (info.kind === "element") {
-      const kids = Array.from(domNode.childNodes).filter((n) => nodeLabel(n));
+      const kids = pageChildNodes(domNode);
       if (kids.length) {
         const children = el("div", { className: `${NS}tree-children` });
         children.style.display = depth < 2 ? "block" : "none";
@@ -552,6 +667,29 @@ async function authenticate() {
       detail.appendChild(el("div", { className: `${NS}side-text` }, `${prop}: ${styles.getPropertyValue(prop)}`));
     }
 
+    detail.appendChild(el("div", { className: `${NS}side-heading` }, "Edit textContent"));
+    const tx = el("textarea", { className: `${NS}textarea`, style: { maxWidth: "100%", minHeight: "48px" } });
+    tx.value = domNode.textContent || "";
+    const saveTx = el("button", { className: `${NS}action`, dataset: { primary: "1" } }, "Set text");
+    saveTx.onclick = async () => {
+      if (!(await authenticate())) return;
+      domNode.textContent = tx.value;
+    };
+    detail.append(tx, saveTx);
+
+    detail.appendChild(el("div", { className: `${NS}side-heading` }, "Set attribute"));
+    const an = el("input", { className: `${NS}input`, placeholder: "name" });
+    const av = el("input", { className: `${NS}input`, placeholder: "value" });
+    const saveA = el("button", { className: `${NS}action` }, "Apply attr");
+    saveA.onclick = async () => {
+      if (!(await authenticate())) return;
+      if (!an.value.trim()) return;
+      if (av.value === "") domNode.removeAttribute(an.value.trim());
+      else domNode.setAttribute(an.value.trim(), av.value);
+      updateElementDetail(domNode);
+    };
+    detail.append(an, av, saveA);
+
     const delBtn = el("button", { className: `${NS}action`, dataset: { danger: "1" } }, "Remove element");
     delBtn.onclick = async () => {
       if (!(await authenticate())) return;
@@ -594,7 +732,7 @@ async function authenticate() {
     refresh.onclick = () => render(search.value.trim());
 
     detail.appendChild(el("div", { className: `${NS}side-heading` }, "DOM Inspector"));
-    detail.appendChild(el("div", { className: `${NS}side-text` }, "Hover to highlight · Click to inspect"));
+    detail.appendChild(el("div", { className: `${NS}side-text` }, "Page DOM only — DevTools UI hidden. Hover to highlight · Click to inspect / edit."));
   }
 
   /* ── Console ── */
@@ -689,21 +827,40 @@ async function authenticate() {
     clear(detail);
     detail.style.display = "";
 
-    const source = document.documentElement.outerHTML;
+    // Never include DevTools chrome in the Sources buffer
+    const source = pageHtmlSnapshot();
     const ed = await createMonaco(source, "html");
+    await applyMonacoFromN3xn(editorReady ? editor : null);
 
     const apply = el("button", { className: `${NS}action`, dataset: { primary: "1" } }, "Apply changes");
     apply.onclick = async () => {
       if (!(await authenticate())) return;
-      const replacement = editorReady ? editor.getValue() : ed.value;
+      let replacement = editorReady ? editor.getValue() : ed.value;
+      // Keep DevTools alive after apply: re-append root if stripped
       document.open();
       document.write(replacement);
       document.close();
+      // Re-bootstrap DevTools after document.write wipes the page
+      setTimeout(() => {
+        try {
+          const s = document.createElement("script");
+          s.src = "/devtools.js?re=" + Date.now();
+          document.documentElement.appendChild(s);
+        } catch (_) {}
+      }, 50);
+    };
+
+    const copyBtn = el("button", { className: `${NS}action` }, "Copy HTML");
+    copyBtn.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(editorReady ? editor.getValue() : ed.value);
+      } catch (_) {}
     };
 
     detail.appendChild(el("div", { className: `${NS}side-heading` }, "Sources"));
-    detail.appendChild(el("div", { className: `${NS}side-text` }, "Edit live HTML. Apply requires password."));
+    detail.appendChild(el("div", { className: `${NS}side-text` }, "Page HTML only (DevTools chrome excluded). Monaco uses n3xn settings from IDB when available."));
     detail.appendChild(apply);
+    detail.appendChild(copyBtn);
   }
 
   /* ── Network ── */
@@ -2638,6 +2795,184 @@ ${favicon ? `<link rel="icon" href="${escapeHTML(favicon)}">` : ""}
     }
   }
 
+
+  /* ── Service Workers ── */
+
+  async function showServiceWorkers() {
+    currentTab = "Service Workers";
+    clear(main);
+    clear(detail);
+    detail.style.display = "";
+
+    const toolbar = el("div", { className: `${NS}toolbar` });
+    const refresh = el("button", { className: `${NS}action`, style: { margin: "0" } }, "Refresh");
+    toolbar.appendChild(refresh);
+    main.appendChild(toolbar);
+    const list = el("div", { className: `${NS}storage-list` });
+    main.appendChild(list);
+
+    async function render() {
+      clear(list);
+      if (!("serviceWorker" in navigator)) {
+        list.appendChild(el("div", { className: `${NS}empty` }, "Service Workers not supported."));
+        return;
+      }
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        if (!regs.length) {
+          list.appendChild(el("div", { className: `${NS}empty` }, "No service workers registered on this origin."));
+        }
+        for (const reg of regs) {
+          const row = el("div", { className: `${NS}storage-row` });
+          const scope = reg.scope || "";
+          const state = (reg.active && reg.active.state) || (reg.installing && reg.installing.state) || (reg.waiting && reg.waiting.state) || "?";
+          const scriptURL = (reg.active && reg.active.scriptURL) || (reg.installing && reg.installing.scriptURL) || "";
+          row.append(
+            el("div", { className: `${NS}storage-key` }, scope),
+            el("div", { className: `${NS}storage-val` }, state + " · " + scriptURL.slice(0, 60)),
+            el("div", {}, ""),
+          );
+          row.style.cursor = "pointer";
+          row.onclick = () => {
+            clear(detail);
+            detail.appendChild(el("div", { className: `${NS}side-heading` }, "Service Worker"));
+            detail.appendChild(el("div", { className: `${NS}side-text` }, "scope: " + scope));
+            detail.appendChild(el("div", { className: `${NS}side-text` }, "state: " + state));
+            detail.appendChild(el("div", { className: `${NS}side-text` }, "script: " + scriptURL));
+            const upd = el("button", { className: `${NS}action` }, "Update");
+            upd.onclick = async () => { try { await reg.update(); render(); } catch (e) { alert(e); } };
+            const unreg = el("button", { className: `${NS}action`, dataset: { danger: "1" } }, "Unregister");
+            unreg.onclick = async () => {
+              if (!(await authenticate())) return;
+              try { await reg.unregister(); render(); } catch (e) { alert(e); }
+            };
+            detail.append(upd, unreg);
+          };
+          list.appendChild(row);
+        }
+        // controller
+        const ctrl = navigator.serviceWorker.controller;
+        detail.appendChild(el("div", { className: `${NS}side-heading` }, "Controller"));
+        detail.appendChild(el("div", { className: `${NS}side-text` }, ctrl ? ctrl.scriptURL + " (" + ctrl.state + ")" : "(none controlling this page)"));
+      } catch (err) {
+        list.appendChild(el("div", { className: `${NS}empty` }, String(err)));
+      }
+    }
+    refresh.onclick = render;
+    render();
+  }
+
+  /* ── Performance ── */
+
+  function showPerformance() {
+    currentTab = "Performance";
+    clear(main);
+    clear(detail);
+    detail.style.display = "";
+    const wrap = el("div", { className: `${NS}settings` });
+    main.appendChild(wrap);
+    const mem = performance.memory;
+    const nav = performance.getEntriesByType("navigation")[0];
+    const paint = performance.getEntriesByType("paint");
+    const lines = [
+      "timeOrigin: " + performance.timeOrigin,
+      "now: " + Math.round(performance.now()) + " ms",
+      mem ? "heap used: " + Math.round(mem.usedJSHeapSize / 1048576) + " MB" : "heap: n/a",
+      mem ? "heap total: " + Math.round(mem.totalJSHeapSize / 1048576) + " MB" : "",
+      nav ? "DOMContentLoaded: " + Math.round(nav.domContentLoadedEventEnd) + " ms" : "",
+      nav ? "load: " + Math.round(nav.loadEventEnd) + " ms" : "",
+    ].filter(Boolean);
+    for (const p of paint) lines.push(p.name + ": " + Math.round(p.startTime) + " ms");
+    for (const L of lines) wrap.appendChild(el("div", { className: `${NS}side-text` }, L));
+
+    const res = performance.getEntriesByType("resource").slice(-40);
+    wrap.appendChild(el("div", { className: `${NS}side-heading` }, "Recent resources"));
+    for (const r of res.reverse()) {
+      wrap.appendChild(el("div", { className: `${NS}side-text` }, Math.round(r.duration) + "ms · " + (r.name || "").slice(0, 80)));
+    }
+    detail.appendChild(el("div", { className: `${NS}side-heading` }, "Performance"));
+    detail.appendChild(el("div", { className: `${NS}side-text` }, "Timing + resource entries. Use Network tab for live intercept."));
+  }
+
+  /* ── Limited n3xn commands (same-origin IDB / globals) ── */
+
+  function showN3xn() {
+    currentTab = "n3xn";
+    clear(main);
+    clear(detail);
+    detail.style.display = "";
+
+    const wrap = el("div", { className: `${NS}settings` });
+    main.appendChild(wrap);
+    wrap.appendChild(el("div", { className: `${NS}side-heading` }, "n3xn bridge (same-origin)"));
+    wrap.appendChild(el("div", { className: `${NS}side-text` },
+      "Talks to the host n3xn shell when this page is the VFS app (or shares origin). No remote server."));
+
+    const path = el("input", { className: `${NS}input`, placeholder: "VFS path e.g. /app/index.html", value: window.__n3xnActivePath || "" });
+    wrap.appendChild(el("div", { className: `${NS}label` }, "Active path"));
+    wrap.appendChild(path);
+
+    const out = el("div", { className: `${NS}console-output` });
+    wrap.appendChild(out);
+    const write = (s, cls) => {
+      const row = el("div", { className: `${NS}console-row ${NS}${cls || "result"}` });
+      row.textContent = s;
+      out.appendChild(row);
+      out.scrollTop = out.scrollHeight;
+    };
+
+    const mk = (label, fn) => {
+      const b = el("button", { className: `${NS}action` }, label);
+      b.onclick = async () => {
+        try { await fn(); } catch (e) { write(String(e), "error"); }
+      };
+      wrap.appendChild(b);
+    };
+
+    mk("Refresh Monaco settings from IDB", async () => {
+      const s = await loadN3xnMonacoSettings();
+      write(s ? JSON.stringify(s).slice(0, 500) : "(no settings found in IDB/localStorage)");
+      if (editor && editorReady) await applyMonacoFromN3xn(editor);
+    });
+
+    mk("Open host DevTools API", async () => {
+      if (typeof window.__n3xnOpenDevtools === "function") {
+        window.__n3xnOpenDevtools();
+        write("opened via __n3xnOpenDevtools");
+      } else write("Host API not present (standalone page)");
+    });
+
+    mk("List window.__n3xn* globals", async () => {
+      const keys = Object.getOwnPropertyNames(window).filter((k) => /n3xn/i.test(k));
+      write(keys.join("\n") || "(none)");
+    });
+
+    mk("Run: xdebug active path (if host)", async () => {
+      if (window.__n3xnRunXdebug) {
+        await window.__n3xnRunXdebug(path.value || window.__n3xnActivePath);
+        write("xdebug requested");
+      } else write("Host xdebug bridge not available");
+    });
+
+    const cmdIn = el("input", { className: `${NS}input`, placeholder: "limited eval on window (e.g. location.href)" });
+    wrap.appendChild(el("div", { className: `${NS}label` }, "Eval expression"));
+    wrap.appendChild(cmdIn);
+    mk("Eval", async () => {
+      if (!(await authenticate())) return;
+      try {
+        const r = (0, eval)(cmdIn.value);
+        write(typeof r === "object" ? JSON.stringify(r) : String(r));
+      } catch (e) {
+        write(String(e), "error");
+      }
+    });
+
+    detail.appendChild(el("div", { className: `${NS}side-heading` }, "n3xn"));
+    detail.appendChild(el("div", { className: `${NS}side-text` },
+      "IDB sync for Monaco settings + host globals. Full terminal lives in the n3xn shell."));
+  }
+
+
   /* ── Tabs ── */
 
   function activateTab(tab) {
@@ -2647,6 +2982,9 @@ ${favicon ? `<link rel="icon" href="${escapeHTML(favicon)}">` : ""}
       case "Sources": showSources(); break;
       case "Network": showNetwork(); break;
       case "Application": showApplication(); break;
+      case "Service Workers": showServiceWorkers(); break;
+      case "Performance": showPerformance(); break;
+      case "n3xn": showN3xn(); break;
       case "Clicker": showClicker(); break;
       case "Persist": showPersist(); break;
       case "Settings": showSettings(); break;
@@ -2771,7 +3109,7 @@ ${favicon ? `<link rel="icon" href="${escapeHTML(favicon)}">` : ""}
     const titlebar = el("div", { className: `${NS}titlebar` });
 
     const tabbar = el("div", { className: `${NS}tabs` });
-    const tabNames = ["Elements", "Console", "Sources", "Network", "Application", "Clicker", "Persist", "Settings"];
+    const tabNames = ["Elements", "Console", "Sources", "Network", "Application", "Service Workers", "Performance", "n3xn", "Clicker", "Persist", "Settings"];
     for (const tabName of tabNames) {
       const button = el("button", { className: `${NS}tab`, type: "button" }, tabName);
       button.dataset.tab = tabName;
