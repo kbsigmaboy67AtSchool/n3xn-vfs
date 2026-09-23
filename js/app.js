@@ -1128,8 +1128,13 @@ import("./n3xn-devtools.js")
 window.__n3xnRunXdebug = async (path) => {
   try {
     const xd = await import("./xdebug.js");
-    const r = await xd.xdebugPath(path || window.__n3xnActivePath, { live: false });
-    console.info("[n3xn xdebug]", xd.formatReport?.(r, path) || r);
+    const p = path || window.__n3xnActivePath;
+    if (!p) {
+      console.warn("[n3xn xdebug] no active file path");
+      return { ok: false, error: "no path" };
+    }
+    const r = await xd.xdebugPath(p, { live: false });
+    console.info("[n3xn xdebug]", xd.formatReport?.(r, p) || r);
     return r;
   } catch (e) {
     console.error(e);
