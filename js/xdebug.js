@@ -970,3 +970,11 @@ export function fixPrompt(err) {
     (err.context ? err.context.join("\n") : "")
   );
 }
+
+
+/** Bridge to n3xn DevTools panel */
+export async function openDevtools() {
+  const dt = await import("./n3xn-devtools.js");
+  dt.mountHostDevtools();
+  dt.openDevtools();
+}
