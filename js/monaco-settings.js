@@ -541,6 +541,10 @@ ${s.uiCustomCss || ""}
 export function applySettings(settings) {
   const s = { ...DEFAULTS, ...settings };
   lastApplied = s;
+  try {
+    window.__n3xnMonacoSettings = s;
+    localStorage.setItem("n3xn-monaco-settings", JSON.stringify(s));
+  } catch (_) {}
   defineExtraThemes();
 
   const ed = getEditor();
@@ -1054,9 +1058,27 @@ export async function applyForOpenFile(path) {
 export function applyMonacoSettingsToEditor(editor) {
   try {
     if (!editor || !window.monaco) return;
-    const s = (typeof loadSettings === "function" && loadSettings()) || window.__n3xnMonacoSettings || {};
+    let s = window.__n3xnMonacoSettings || lastApplied || {};
+    try {
+      const raw = localStorage.getItem("n3xn-monaco-settings");
+      if (raw) s = { ...s, ...JSON.parse(raw) };
+    } catch (_) {}
     if (s.theme) window.monaco.editor.setTheme(s.theme);
-    if (s.options) editor.updateOptions(s.options);
+    editor.updateOptions({
+      fontSize: Number(s.fontSize) || 13,
+      fontFamily: s.fontFamily,
+      wordWrap: s.wordWrap || "off",
+      minimap: { enabled: !!s.minimap },
+      lineNumbers: s.lineNumbers || "on",
+      tabSize: Number(s.tabSize) || 2,
+      insertSpaces: s.insertSpaces !== false,
+      cursorBlinking: s.cursorBlinking || "smooth",
+      cursorStyle: s.cursorStyle || "line",
+      cursorWidth: Number(s.cursorWidth) || 2,
+      renderWhitespace: s.renderWhitespace || "selection",
+      smoothScrolling: !!s.smoothScrolling,
+      mouseWheelZoom: !!s.mouseWheelZoom,
+    });
   } catch (_) {}
 }
 if (typeof window !== "undefined") {
