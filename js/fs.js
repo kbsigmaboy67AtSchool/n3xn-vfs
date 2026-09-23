@@ -96,32 +96,86 @@ function getParent(path) {
   const name = parts.pop();
   let parent = tree;
   for (const p of parts) {
-    if (!parent.children[p] || parent.children[p].type !== "dir") return null;
+    if (!parent || parent.type !== "dir" || !parent.children || !parent.children[p] || parent.children[p].type !== "dir") {
+      return { parent: null, name };
+    }
     parent = parent.children[p];
   }
   return { parent, name };
 }
 
+/** Create all missing parent directories for a path (mkdir -p of dirname) */
+async function ensureParents(path) {
+  path = normalize(path);
+  const parts = split(path);
+  if (parts.length <= 1) return;
+  parts.pop(); // drop filename
+  let cur = "";
+  for (const part of parts) {
+    cur += "/" + part;
+    if (exists(cur)) {
+      if (!isDir(cur)) throw new Error("Not a directory: " + cur);
+      continue;
+    }
+    const { parent, name } = getParent(cur);
+    if (!parent) throw new Error("Parent missing: " + cur);
+    parent.children[name] = { type: "dir", children: {}, created: Date.now() };
+  }
+}
+
+
 export function getTree() {
   return tree;
 }
 
-export async function mkdir(path) {
+export async function mkdir(path, { parents = false } = {}) {
   path = normalize(path);
   if (path === "/") return;
-  const { parent, name } = getParent(path);
-  if (!parent) throw new Error("Parent directory does not exist");
-  if (parent.children[name]) throw new Error("Already exists");
+  if (parents) {
+    const parts = path.split("/").filter(Boolean);
+    let cur = "";
+    for (const part of parts) {
+      cur += "/" + part;
+      if (exists(cur)) {
+        if (!isDir(cur)) throw new Error("Not a directory: " + cur);
+        continue;
+      }
+      const { parent, name } = getParent(cur);
+      if (!parent) throw new Error("Parent missing: " + cur);
+      parent.children[name] = { type: "dir", children: {}, created: Date.now() };
+    }
+    await saveTree();
+    return;
+  }
+  let { parent, name } = getParent(path);
+  if (!parent) {
+    // auto -p for convenience when intermediate dirs missing
+    await ensureParents(path);
+    ({ parent, name } = getParent(path));
+  }
+  if (!parent) throw new Error("Parent directory does not exist (use mkdir -p): " + path);
+  if (!parent.children) parent.children = {};
+  if (parent.children[name]) {
+    if (parent.children[name].type === "dir") return;
+    throw new Error("Already exists as file: " + path);
+  }
   parent.children[name] = { type: "dir", children: {}, created: Date.now() };
   await saveTree();
 }
 
 export async function writeFile(path, content, meta = {}) {
   path = normalize(path);
-  const { parent, name } = getParent(path);
-  if (!parent) throw new Error("Parent directory does not exist: " + path);
+  if (path === "/") throw new Error("Cannot write to root as a file");
 
-  // Ensure parent dirs exist? Optional recursive create
+  let { parent, name } = getParent(path);
+  if (!parent) {
+    await ensureParents(path);
+    ({ parent, name } = getParent(path));
+  }
+  if (!parent) throw new Error("Parent directory does not exist: " + path);
+  if (!name) throw new Error("Invalid path: " + path);
+
+  if (!parent.children) parent.children = {};
   if (!parent.children[name]) {
     parent.children[name] = {
       type: "file",
@@ -130,7 +184,7 @@ export async function writeFile(path, content, meta = {}) {
       modified: Date.now(),
     };
   } else if (parent.children[name].type === "dir") {
-    throw new Error("Is a directory");
+    throw new Error("Is a directory: " + path);
   }
 
   await db.putFile(path, content, meta);
@@ -140,6 +194,7 @@ export async function writeFile(path, content, meta = {}) {
   if (typeof content === "string") node.size = new TextEncoder().encode(content).length;
   else if (content instanceof Uint8Array) node.size = content.length;
   else if (content instanceof ArrayBuffer) node.size = content.byteLength;
+  else if (content && content.byteLength != null) node.size = content.byteLength;
   await saveTree();
 }
 
