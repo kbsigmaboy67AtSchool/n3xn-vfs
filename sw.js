@@ -20,6 +20,10 @@ const SHELL_URLS = [
   "./js/runner.js",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./js/devtools.js",
+  "./devtools.js",
+  "./css/devtools.css",
+  "./devtools.css"
 ];
 
 const MONACO_CORE = [
