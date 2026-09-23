@@ -1,5 +1,5 @@
 /* n3xn VFS service worker — Monaco same-origin proxy + app shell */
-const SHELL = "n3xn-shell-v6";
+const SHELL = "n3xn-shell-v7";
 const MONACO = "n3xn-monaco-v3";
 const PREFIX = "/__monaco__/";
 const CDN = "https://cdn.jsdelivr.net/";
