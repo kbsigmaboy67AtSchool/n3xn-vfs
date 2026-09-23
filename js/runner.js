@@ -25,6 +25,7 @@ window.n3xn.perf = {
  */
 
 import * as fs from "./fs.js";
+import { injectIntoHtml } from "./n3xn-devtools.js";
 
 let previewVisible = false;
 const blobRegistry = []; // { url, path, mime, created }
@@ -108,18 +109,33 @@ export async function createBlobFromPath(path, overrideMime) {
   const f = await fs.readFile(path);
   if (!f) throw new Error("File not found: " + path);
   const mime = overrideMime || f.mime || mimeFor(path);
-  const blob = new Blob([f.content], { type: mime });
+  let data = f.content;
+  // Inject n3xn DevTools into HTML pages
+  if ((mime || "").includes("html") || /\.html?$/i.test(path)) {
+    try {
+      let text = typeof data === "string" ? data : new TextDecoder().decode(data);
+      text = injectIntoHtml(text, { path });
+      data = text;
+    } catch (_) {}
+  }
+  const blob = new Blob([data], { type: mime });
   const url = URL.createObjectURL(blob);
-  blobRegistry.push({ url, path, mime, created: Date.now(), size: f.content.length });
-  termPrintLink(`[blob] ${path} (${mime}, ${f.content.length}b) →`, url);
-  return { blob, url, mime, size: f.content.length };
+  blobRegistry.push({ url, path, mime, created: Date.now(), size: typeof data === "string" ? data.length : data.length });
+  termPrintLink(`[blob] ${path} (${mime}, ${blob.size}b) →`, url);
+  return { blob, url, mime, size: blob.size };
 }
 
 export function createBlobFromText(text, mime, label = "inline") {
-  const blob = new Blob([text], { type: mime || "text/html" });
+  let body = text;
+  if ((mime || "text/html").includes("html")) {
+    try {
+      body = injectIntoHtml(String(text), { path: label });
+    } catch (_) {}
+  }
+  const blob = new Blob([body], { type: mime || "text/html" });
   const url = URL.createObjectURL(blob);
-  blobRegistry.push({ url, path: label, mime: mime || "text/html", created: Date.now(), size: text.length });
-  termPrintLink(`[blob] ${label} (${mime || "text/html"}, ${text.length}b) →`, url);
+  blobRegistry.push({ url, path: label, mime: mime || "text/html", created: Date.now(), size: body.length });
+  termPrintLink(`[blob] ${label} (${mime || "text/html"}, ${body.length}b) →`, url);
   return { blob, url, mime: mime || "text/html" };
 }
 
