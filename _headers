@@ -15,3 +15,14 @@
 
 /__monaco__/*
   Cache-Control: public, max-age=31536000
+
+
+/icons/*
+  Cache-Control: public, max-age=86400
+
+/icons/*.png
+  Content-Type: image/png
+
+/devtools.js
+  Content-Type: application/javascript; charset=utf-8
+  Cache-Control: no-cache
