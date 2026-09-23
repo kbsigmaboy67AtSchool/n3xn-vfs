@@ -1,3 +1,6 @@
+/*
+  Cache-Control: no-transform
+
 /js/*
   Content-Type: application/javascript; charset=utf-8
   X-Content-Type-Options: nosniff
@@ -8,14 +11,13 @@
 /sw.js
   Content-Type: application/javascript; charset=utf-8
   Service-Worker-Allowed: /
-  Cache-Control: no-cache
+  Cache-Control: no-cache, no-transform
 
 /manifest.webmanifest
   Content-Type: application/manifest+json; charset=utf-8
 
 /__monaco__/*
   Cache-Control: public, max-age=31536000
-
 
 /icons/*
   Cache-Control: public, max-age=86400
@@ -25,4 +27,4 @@
 
 /devtools.js
   Content-Type: application/javascript; charset=utf-8
-  Cache-Control: no-cache
+  Cache-Control: no-cache, no-transform
