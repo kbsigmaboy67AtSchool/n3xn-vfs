@@ -868,6 +868,10 @@ async function checkZip(path, bytes) {
 }
 
 export async function xdebugPath(path, opts = {}) {
+  if (path == null || path === "") {
+    throw new Error("xdebug: no path (open a file or pass a VFS path)");
+  }
+  path = String(path);
   path = path.startsWith("/") ? path : "/" + path;
   if (typeof fs.isDir === "function" && fs.isDir(path)) {
     return xdebugDir(path, opts);
