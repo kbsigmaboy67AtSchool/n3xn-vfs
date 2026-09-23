@@ -1048,3 +1048,17 @@ export async function applyForOpenFile(path) {
   const s = await getSettingsForPath(path);
   applySettings(s);
 }
+
+
+/** Used by DevTools Sources Monaco to match host theme/settings */
+export function applyMonacoSettingsToEditor(editor) {
+  try {
+    if (!editor || !window.monaco) return;
+    const s = (typeof loadSettings === "function" && loadSettings()) || window.__n3xnMonacoSettings || {};
+    if (s.theme) window.monaco.editor.setTheme(s.theme);
+    if (s.options) editor.updateOptions(s.options);
+  } catch (_) {}
+}
+if (typeof window !== "undefined") {
+  window.__n3xnApplyMonacoSettings = applyMonacoSettingsToEditor;
+}
