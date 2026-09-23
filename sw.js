@@ -5,7 +5,7 @@ const PREFIX = "/__monaco__/";
 const CDN = "https://cdn.jsdelivr.net/";
 const VER = "monaco-editor@0.52.0";
 
-const VORTEX_GITHUB_URL = "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
+const VORTEX_GITHUB_URL = "https://kbsigmaboy67atschool.github.io/V0RT3X-C0D3S/";
 
 const SHELL_URLS = [
   "./",
