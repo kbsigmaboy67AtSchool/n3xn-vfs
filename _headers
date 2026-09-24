@@ -30,6 +30,12 @@
 /__monaco__/*
   Cache-Control: public, max-age=31536000, no-transform
 
+/__pyodide__/*
+  Cache-Control: public, max-age=31536000, no-transform
+
+/__cdn__/*
+  Cache-Control: public, max-age=31536000, no-transform
+
 /icons/*
   Cache-Control: public, max-age=86400, no-transform
 
