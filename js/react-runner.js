@@ -9,8 +9,26 @@
 import * as fs from "./fs.js";
 import { createBlobFromText } from "./runner.js";
 
-const BABEL_CDN = "https://cdn.jsdelivr.net/npm/@babel/standalone@7.26.5/babel.min.js";
+const BABEL_CDN_REMOTE = "https://cdn.jsdelivr.net/npm/@babel/standalone@7.26.5/babel.min.js";
 const REACT_VERSION = "18.3.1";
+
+function babelUrl() {
+  try {
+    if (navigator.serviceWorker?.controller) {
+      return "/__cdn__/jsdelivr/npm/@babel/standalone@7.26.5/babel.min.js";
+    }
+  } catch (_) {}
+  return BABEL_CDN_REMOTE;
+}
+
+function esmUrl(spec) {
+  try {
+    if (navigator.serviceWorker?.controller) {
+      return "/__cdn__/esm/" + spec;
+    }
+  } catch (_) {}
+  return "https://esm.sh/" + spec;
+}
 
 let babelReady = null;
 
@@ -19,7 +37,7 @@ async function ensureBabel() {
   if (babelReady) return babelReady;
   babelReady = new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = BABEL_CDN;
+    s.src = babelUrl();
     s.onload = () => resolve(window.Babel);
     s.onerror = () => reject(new Error("Failed to load Babel standalone"));
     document.head.appendChild(s);
@@ -56,7 +74,7 @@ function resolveImport(spec, fromFile) {
   if (!spec.startsWith(".") && !spec.startsWith("/")) {
     return {
       type: "cdn",
-      path: `https://esm.sh/${spec}`,
+      path: esmUrl(spec),
       bare: spec,
     };
   }
@@ -219,6 +237,9 @@ export async function buildReactApp(entryPath, opts = {}) {
   const tableJson = JSON.stringify(moduleTable);
   const entryJson = JSON.stringify(entryReal);
 
+  const reactCdnAbs = new URL(esmUrl(`react@${REACT_VERSION}`), location.origin).href;
+  const rdomCdnAbs = new URL(esmUrl(`react-dom@${REACT_VERSION}/client`), location.origin).href;
+
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -238,8 +259,8 @@ export async function buildReactApp(entryPath, opts = {}) {
   <script type="module">
     const MODULES = ${tableJson};
     const ENTRY = ${entryJson};
-    const REACT_CDN = "https://esm.sh/react@${REACT_VERSION}";
-    const RDOM_CDN = "https://esm.sh/react-dom@${REACT_VERSION}/client";
+    const REACT_CDN = ${JSON.stringify(reactCdnAbs)};
+    const RDOM_CDN = ${JSON.stringify(rdomCdnAbs)};
 
     function dirname(p) {
       const i = p.lastIndexOf("/");
