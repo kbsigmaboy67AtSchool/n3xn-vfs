@@ -1,6 +1,8 @@
 {
   "version": 1,
-  "include": ["/*"],
+  "include": [
+    "/*"
+  ],
   "exclude": [
     "/sw.js",
     "/manifest.webmanifest",
@@ -8,6 +10,13 @@
     "/js/*",
     "/css/*",
     "/icons/*",
-    "/assets/*"
+    "/assets/*",
+    "/__pyodide__/*",
+    "/__cdn__/*",
+    "/devtools.js",
+    "/devtools.css",
+    "/V0RT3X_chat.html",
+    "/mc.html",
+    "/n3xn-chat.html"
   ]
 }
