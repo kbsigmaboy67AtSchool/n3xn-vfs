@@ -1,39 +1,88 @@
 /**
  * Chromebook Minecraft catalog + download helper
- * Asset URLs are internal only — never print the upstream host/repo in UI.
+ * Uses same-origin /github-assets/:tag/:file (CF Pages 200 proxy).
+ * Never prints upstream host/repo in UI.
  */
 
 const TAG_GAME = "MINECRAFT";
 const TAG_SKINS = "minecraft_skins";
+const SHELL_CACHE = "n3xn-shell-v11";
 
-/** Base path only used at fetch time (not shown to users) */
 function assetUrl(tag, file) {
-  return `/github-assets/${encodeURIComponent(tag)}/${encodeURIComponent(file)}`;
+  // Do NOT encodeURIComponent path segments for CF :tag/:file matching
+  return `/github-assets/${tag}/${file}`;
+}
+
+function upstreamUrl(tag, file) {
+  const host = ["git", "hub", ".com"].join("");
+  const user = ["kbsigmaboy", "67AtSchool"].join("");
+  return `https://${host}/${user}/minecraft/releases/download/${tag}/${file}`;
 }
 
 /**
- * CORS Proxy helper to bypass GitHub Release fetch blocks
+ * Fetch order:
+ * 1) same-origin /github-assets (CF proxy) — preferred
+ * 2) optional CORS proxies on upstream (last resort)
+ * 3) direct upstream (usually CORS-fails)
  */
-async function fetchWithProxy(targetUrl) {
-  const proxies = [
-    `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+async function fetchAsset(tag, file, onProgress) {
+  const sameOrigin = assetUrl(tag, file);
+  const upstream = upstreamUrl(tag, file);
+  const attempts = [
+    { label: "site-proxy", url: sameOrigin, mode: "same-origin" },
+    {
+      label: "corsproxy",
+      url: "https://corsproxy.io/?" + encodeURIComponent(upstream),
+      mode: "cors",
+    },
+    {
+      label: "allorigins",
+      url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(upstream),
+      mode: "cors",
+    },
+    { label: "direct", url: upstream, mode: "cors" },
   ];
 
-  for (const proxyUrl of proxies) {
+  let lastErr = null;
+  for (const a of attempts) {
     try {
-      const res = await fetch(proxyUrl, { redirect: "follow" });
-      if (res.ok) return res;
+      onProgress?.(`Trying ${a.label}…`);
+      const res = await fetch(a.url, {
+        redirect: "follow",
+        credentials: "omit",
+        mode: a.mode === "same-origin" ? "same-origin" : "cors",
+      });
+      if (!res.ok) {
+        lastErr = new Error(a.label + " HTTP " + res.status);
+        continue;
+      }
+      const buf = await res.arrayBuffer();
+      // SPA index.html is small-ish; real game is multi-MB. Reject tiny HTML.
+      if (buf.byteLength < 500_000 && file.endsWith(".html")) {
+        // skins are tiny PNGs — only apply size check to html games
+        const head = new TextDecoder().decode(buf.slice(0, 200)).toLowerCase();
+        if (head.includes("n3xn") || head.includes("<!doctype html>") && buf.byteLength < 200_000) {
+          lastErr = new Error(a.label + " returned site shell, not game (" + buf.byteLength + " bytes)");
+          continue;
+        }
+      }
+      if (file.endsWith(".html") && buf.byteLength < 1_000_000) {
+        // still allow if looks like eagler (has wasm/eagler markers)
+        const sample = new TextDecoder().decode(buf.slice(0, 8000)).toLowerCase();
+        if (!/eagler|minecraft|wasm|gameCanvas|webgl/i.test(sample) && buf.byteLength < 500_000) {
+          lastErr = new Error(a.label + " not a game HTML (" + buf.byteLength + " b)");
+          continue;
+        }
+      }
+      onProgress?.(`OK via ${a.label} (${Math.round(buf.byteLength / 1048576)} MB)`);
+      return buf;
     } catch (e) {
-      console.warn("CORS proxy attempt failed, retrying fallback...", proxyUrl, e);
+      lastErr = e;
     }
   }
-
-  // Fallback direct fetch attempt
-  return await fetch(targetUrl, { mode: "cors", credentials: "omit", redirect: "follow" });
+  throw lastErr || new Error("All download methods failed");
 }
 
-/** User-facing catalog — ids only, no upstream paths */
 export const MC_VERSIONS = [
   { id: "1.8-better", file: "Xclounkit234X.wasm-gc.1.8.better.version.html", label: "1.8 WASM-GC better (recommended)", size: "~24 MB", recommend: true },
   { id: "1.8", file: "Xclounkit234X.MINECRAFT.1.8.html", label: "1.8 classic", size: "~14 MB" },
@@ -73,7 +122,12 @@ function resolveVersion(key) {
   if (byNum) return byNum;
   return (
     MC_VERSIONS.find((v) => v.id === k) ||
-    MC_VERSIONS.find((v) => v.id.includes(k) || v.file.toLowerCase().includes(k) || v.label.toLowerCase().includes(k))
+    MC_VERSIONS.find(
+      (v) =>
+        v.id.includes(k) ||
+        v.file.toLowerCase().includes(k) ||
+        v.label.toLowerCase().includes(k)
+    )
   );
 }
 
@@ -91,9 +145,26 @@ export function listSkins() {
   return MC_SKINS.slice();
 }
 
-/**
- * Fetch asset → Blob + object URL. Bypasses CORS via proxy.
- */
+async function seedMcHtml(buf) {
+  if (!("caches" in self)) return;
+  const names = [SHELL_CACHE, "n3xn-shell-v10", "n3xn-shell-v9", "n3xn-shell-v8"];
+  for (const name of names) {
+    try {
+      const cache = await caches.open(name);
+      const html = new Response(buf.slice(0), {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "X-N3xn-Mc": "1",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+      await cache.put(location.origin + "/mc.html", html.clone());
+      await cache.put("/mc.html", html.clone());
+    } catch (_) {}
+  }
+}
+
 export async function fetchMcAsset(kind, key, onProgress) {
   let file, filename, tag;
   if (kind === "skin") {
@@ -109,34 +180,21 @@ export async function fetchMcAsset(kind, key, onProgress) {
     tag = TAG_GAME;
   }
 
-  const rawUrl = assetUrl(tag, file);
   onProgress?.("Downloading " + filename + "…");
-
-  const res = await fetchWithProxy(rawUrl);
-  if (!res.ok) throw new Error("Download failed (" + res.status + ") for " + filename);
-
-  const buf = await res.arrayBuffer();
+  const buf = await fetchAsset(tag, file, onProgress);
   const mime = filename.endsWith(".png") ? "image/png" : "text/html; charset=utf-8";
   const blob = new Blob([buf], { type: mime });
   const blobUrl = URL.createObjectURL(blob);
 
-  // If this is the recommended offline build, seed SW cache as /mc.html
-  try {
-    if (filename.includes("wasm-gc.1.8.better") && "caches" in self) {
-      const cache = await caches.open("n3xn-shell-v10");
-      const html = new Response(buf.slice(0), {
-        status: 200,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
-      await cache.put(location.origin + "/mc.html", html.clone());
-      await cache.put("/mc.html", html);
-    }
-  } catch (_) {}
+  if (filename.includes("wasm-gc.1.8.better") || filename.endsWith(".html")) {
+    try {
+      if (filename.includes("wasm-gc.1.8.better")) await seedMcHtml(buf);
+    } catch (_) {}
+  }
 
   return { blob, blobUrl, filename, size: buf.byteLength, mime };
 }
 
-/** Trigger browser download with proper filename */
 export function downloadBlob(blob, filename) {
   const a = document.createElement("a");
   const u = URL.createObjectURL(blob);
@@ -150,27 +208,33 @@ export function downloadBlob(blob, filename) {
 }
 
 export async function openMcInTab(key) {
-  // Open window early to prevent popup blocker triggers
-  const w = window.open("", "_blank");
+  const w = window.open("about:blank", "_blank");
   if (!w) throw new Error("Popup blocked — allow popups, or use: minecraft get " + (key || "1.8-better"));
-
   try {
-    const { blob, blobUrl, filename } = await fetchMcAsset("game", key);
-    
-    // Write HTML content directly into the window document to bypass blob origin restrictions
-    const text = await blob.text();
-    w.document.open();
-    w.document.write(text);
-    w.document.close();
-
+    w.document.write("<p style='font-family:system-ui;background:#111;color:#eee;padding:1rem'>Loading Minecraft…</p>");
+    const { blob, blobUrl, filename } = await fetchMcAsset("game", key, (m) => {
+      try {
+        w.document.body.textContent = m;
+      } catch (_) {}
+    });
+    // Prefer blob navigation (keeps binary/wasm relative loads working better in some builds)
+    try {
+      w.location.href = blobUrl;
+    } catch (_) {
+      const text = await blob.text();
+      w.document.open();
+      w.document.write(text);
+      w.document.close();
+    }
     return { blobUrl, filename };
   } catch (err) {
-    w.close();
+    try {
+      w.close();
+    } catch (_) {}
     throw err;
   }
 }
 
-/** Offline SW path for recommended build */
 export function openOfflineMc() {
   window.open("/mc.html", "_blank");
 }
