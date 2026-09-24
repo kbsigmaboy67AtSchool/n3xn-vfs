@@ -1,6 +1,6 @@
 /**
  * n3xn VFS v4 — Unified Multi-Media Studio
- * Complete production editor supporting Images, SVGs, GIFs, Video, & Audio with 20 tools each.
+ * Complete production editor supporting Images, SVGs, GIFs, Video, & Audio.
  */
 import * as fs from "./fs.js";
 
@@ -16,6 +16,12 @@ let layers = [];
 let selectedLayerIndex = -1;
 let rotation = 0;
 let activeTool = "select";
+
+// Interactive Drawing State
+let isDrawing = false;
+let startX = 0;
+let startY = 0;
+let snapshot = null;
 
 // Audio State (Web Audio API)
 let audioCtx = null;
@@ -144,7 +150,7 @@ function bindGlobalEvents() {
     btn.onclick = () => switchMode(btn.dataset.mode);
   });
 
-  // Canvas Interactions
+  // Canvas Drawing Interactions
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("pointermove", handlePointerMove);
   canvas.addEventListener("pointerup", handlePointerUp);
@@ -172,6 +178,10 @@ function switchMode(mode) {
   updateStatus(`Switched to ${mode.toUpperCase()} mode`);
 }
 
+function showPanel() {
+  if (panel) panel.style.display = "flex";
+}
+
 /* ==========================================================================
    AUTO FILE TYPE DETECTOR
    ========================================================================== */
@@ -197,6 +207,125 @@ async function autoDetectAndLoad(path) {
   } else {
     switchMode("image");
   }
+}
+
+/* ==========================================================================
+   INTERACTIVE CANVAS & DRAWING ENGINE
+   ========================================================================== */
+
+function getCanvasCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY
+  };
+}
+
+function getBrushSettings() {
+  const colorEl = panel.querySelector("#insp-color");
+  const sizeEl = panel.querySelector("#insp-size");
+  return {
+    color: colorEl ? colorEl.value : "#00f3ff",
+    size: sizeEl ? Number(sizeEl.value) : 4
+  };
+}
+
+function setTool(tool) {
+  activeTool = tool;
+  renderToolbar();
+}
+
+function handlePointerDown(e) {
+  if (currentMode !== "image" && currentMode !== "svg") return;
+
+  const pos = getCanvasCoords(e);
+  startX = pos.x;
+  startY = pos.y;
+  isDrawing = true;
+
+  const { color, size } = getBrushSettings();
+
+  snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+  ctx.beginPath();
+  ctx.moveTo(startX, startY);
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = size;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  if (activeTool === "marker") {
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = size * 2.5;
+  } else {
+    ctx.globalAlpha = 1.0;
+  }
+
+  if (activeTool === "pen" || activeTool === "marker") {
+    ctx.lineTo(startX, startY);
+    ctx.stroke();
+  }
+}
+
+function handlePointerMove(e) {
+  if (!isDrawing) return;
+  const pos = getCanvasCoords(e);
+
+  if (activeTool === "pen" || activeTool === "marker") {
+    ctx.lineTo(pos.x, pos.y);
+    ctx.stroke();
+  } else if (["rect", "circle", "arrow"].includes(activeTool)) {
+    ctx.putImageData(snapshot, 0, 0);
+    ctx.beginPath();
+
+    const { color, size } = getBrushSettings();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = size;
+
+    if (activeTool === "rect") {
+      ctx.strokeRect(startX, startY, pos.x - startX, pos.y - startY);
+    } else if (activeTool === "circle") {
+      const radius = Math.hypot(pos.x - startX, pos.y - startY);
+      ctx.arc(startX, startY, radius, 0, 2 * Math.PI);
+      ctx.stroke();
+    } else if (activeTool === "arrow") {
+      drawArrow(startX, startY, pos.x, pos.y, size);
+    }
+  }
+}
+
+function handlePointerUp(e) {
+  if (!isDrawing) return;
+  isDrawing = false;
+  ctx.globalAlpha = 1.0;
+  saveHistory();
+}
+
+function drawArrow(fromX, fromY, toX, toY, size) {
+  const headLength = Math.max(12, size * 3);
+  const angle = Math.atan2(toY - fromY, toX - fromX);
+
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(toX, toY);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(toX, toY);
+  ctx.lineTo(
+    toX - headLength * Math.cos(angle - Math.PI / 6),
+    toY - headLength * Math.sin(angle - Math.PI / 6)
+  );
+  ctx.lineTo(
+    toX - headLength * Math.cos(angle + Math.PI / 6),
+    toY - headLength * Math.sin(angle + Math.PI / 6)
+  );
+  ctx.lineTo(toX, toY);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.fill();
 }
 
 /* ==========================================================================
@@ -412,15 +541,23 @@ function bindGifEvents(container) {
   });
 }
 
+function stopGifPlayback() {
+  gifPlaying = false;
+  if (gifTimer) {
+    clearInterval(gifTimer);
+    gifTimer = null;
+  }
+}
+
 function toggleGifPlay() {
-  gifPlaying = !gifPlaying;
   if (gifPlaying) {
+    stopGifPlayback();
+  } else {
+    gifPlaying = true;
     gifTimer = setInterval(() => {
       currentGifFrame = (currentGifFrame + 1) % Math.max(1, gifFrames.length);
       redrawGifFrame();
     }, 1000 / gifFps);
-  } else {
-    clearInterval(gifTimer);
   }
   renderToolbar();
 }
@@ -675,6 +812,7 @@ function exportAudioWav() {
 
 function renderToolbar() {
   const tb = panel.querySelector("#studio-toolbar");
+  if (!tb) return;
   if (currentMode === "image") {
     tb.innerHTML = buildImageToolbar();
     bindImageEvents(tb);
@@ -695,6 +833,7 @@ function renderToolbar() {
 
 function renderInspector() {
   const insp = panel.querySelector("#studio-inspector");
+  if (!insp) return;
   insp.innerHTML = `
     <div class="insp-section">
       <h4>Properties</h4>
@@ -766,133 +905,6 @@ async function saveImageToVfs() {
 }
 
 /* ==========================================================================
-   POINTER DRAG & VECTOR DRAWING HANDLERS
-   ========================================================================== */
-
-/* ==========================================================================
-   INTERACTIVE CANVAS & DRAWING ENGINE
-   ========================================================================== */
-
-let isDrawing = false;
-let startX = 0;
-let startY = 0;
-let snapshot = null;
-
-function getCanvasCoords(e) {
-  const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
-  return {
-    x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
-  };
-}
-
-function getBrushSettings() {
-  const colorEl = panel.querySelector("#insp-color");
-  const sizeEl = panel.querySelector("#insp-size");
-  return {
-    color: colorEl ? colorEl.value : "#00f3ff",
-    size: sizeEl ? Number(sizeEl.value) : 4
-  };
-}
-
-function setTool(tool) {
-  activeTool = tool;
-  renderToolbar();
-}
-
-function handlePointerDown(e) {
-  if (currentMode !== "image" && currentMode !== "svg") return;
-  
-  const pos = getCanvasCoords(e);
-  startX = pos.x;
-  startY = pos.y;
-  isDrawing = true;
-
-  const { color, size } = getBrushSettings();
-
-  snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-  ctx.beginPath();
-  ctx.moveTo(startX, startY);
-  ctx.strokeStyle = color;
-  ctx.fillStyle = color;
-  ctx.lineWidth = size;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  if (activeTool === "marker") {
-    ctx.globalAlpha = 0.35;
-    ctx.lineWidth = size * 2.5;
-  } else {
-    ctx.globalAlpha = 1.0;
-  }
-
-  if (activeTool === "pen" || activeTool === "marker") {
-    ctx.lineTo(startX, startY);
-    ctx.stroke();
-  }
-}
-
-function handlePointerMove(e) {
-  if (!isDrawing) return;
-  const pos = getCanvasCoords(e);
-
-  if (activeTool === "pen" || activeTool === "marker") {
-    ctx.lineTo(pos.x, pos.y);
-    ctx.stroke();
-  } else if (["rect", "circle", "arrow"].includes(activeTool)) {
-    ctx.putImageData(snapshot, 0, 0);
-    ctx.beginPath();
-
-    const { color, size } = getBrushSettings();
-    ctx.strokeStyle = color;
-    ctx.lineWidth = size;
-
-    if (activeTool === "rect") {
-      ctx.strokeRect(startX, startY, pos.x - startX, pos.y - startY);
-    } else if (activeTool === "circle") {
-      const radius = Math.hypot(pos.x - startX, pos.y - startY);
-      ctx.arc(startX, startY, radius, 0, 2 * Math.PI);
-      ctx.stroke();
-    } else if (activeTool === "arrow") {
-      drawArrow(startX, startY, pos.x, pos.y, size);
-    }
-  }
-}
-
-function handlePointerUp(e) {
-  if (!isDrawing) return;
-  isDrawing = false;
-  ctx.globalAlpha = 1.0;
-  saveHistory();
-}
-
-function drawArrow(fromX, fromY, toX, toY, size) {
-  const headLength = Math.max(12, size * 3);
-  const angle = Math.atan2(toY - fromY, toX - fromX);
-
-  ctx.beginPath();
-  ctx.moveTo(fromX, fromY);
-  ctx.lineTo(toX, toY);
-  ctx.stroke();
-
-  ctx.beginPath();
-  ctx.moveTo(toX, toY);
-  ctx.lineTo(
-    toX - headLength * Math.cos(angle - Math.PI / 6),
-    toY - headLength * Math.sin(angle - Math.PI / 6)
-  );
-  ctx.lineTo(
-    toX - headLength * Math.cos(angle + Math.PI / 6),
-    toY - headLength * Math.sin(angle + Math.PI / 6)
-  );
-  ctx.lineTo(toX, toY);
-  ctx.fillStyle = ctx.strokeStyle;
-  ctx.fill();
-}
-/* ==========================================================================
    HISTORY & UNDO / REDO ENGINE
    ========================================================================== */
 
@@ -940,10 +952,6 @@ function handleKeyboard(e) {
     e.preventDefault();
     if (e.shiftKey) redo(); else undo();
   }
-}
-
-function showPanel() {
-  panel.style.display = "flex";
 }
 
 /* Helper to convert Web Audio Buffer to WAV blob */
