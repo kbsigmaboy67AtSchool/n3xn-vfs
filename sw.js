@@ -1,5 +1,5 @@
 /* n3xn VFS SW v7 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, V0RT3X) */
-const SHELL = "n3xn-shell-v10";
+const SHELL = "n3xn-shell-v11";
 const MONACO = "n3xn-monaco-v4";
 const PYODIDE_CACHE = "n3xn-pyodide-v1";
 const CDN_CACHE = "n3xn-cdn-v1";
@@ -36,7 +36,6 @@ const SHELL_URLS = [
   "./index.html",
   "./V0RT3X_chat.html",
   "./n3xn-chat.html",
-  "./mc.html",
   "./manifest.webmanifest",
   "./css/theme.css",
   "./css/app.css",
@@ -231,55 +230,59 @@ async function warmMonaco() {
 
 async function warmMinecraftOffline() {
   const cache = await caches.open(SHELL);
-  // GitHub release assets often block CORS — try several strategies
-  const candidates = [];
+  const candidates = [
+    self.location.origin + "/github-assets/MINECRAFT/" + MC_OFFLINE_FILE,
+    self.location.origin + "/mc-source.html",
+  ];
   try { candidates.push(MC_OFFLINE_URL); } catch (_) {}
-  // jsDelivr release-style (works when tag+file published to repo path; may 404 for pure release assets)
-  try {
-    const host = ["cdn.", "jsdelivr.", "net"].join("");
-    candidates.push("https://" + host + "/gh/kbsigmaboy67AtSchool/minecraft@MINECRAFT/" + MC_OFFLINE_FILE);
-  } catch (_) {}
-  // Same-origin deploy override: if site ships static mc.html, prefer network origin
-  candidates.unshift(self.location.origin + "/mc-source.html");
 
   for (const url of candidates) {
     try {
-      const res = await fetch(url, { mode: "cors", credentials: "omit", redirect: "follow" });
+      const res = await fetch(url, { credentials: "omit", redirect: "follow" });
       if (!res.ok) continue;
       const buf = await res.arrayBuffer();
-      if (buf.byteLength < 1000) continue; // not real game
+      if (buf.byteLength < 1000000) continue; // reject SPA / tip pages
+      const sample = new TextDecoder().decode(buf.slice(0, 4000)).toLowerCase();
+      if (sample.includes("n3xn virtual") || sample.includes("minecraft not cached")) continue;
       const html = new Response(buf, {
         status: 200,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "public, max-age=86400",
+          "X-N3xn-Mc": "1",
         },
       });
       await cache.put(self.location.origin + "/mc.html", html.clone());
       await cache.put("/mc.html", html.clone());
-      console.info("[n3xn sw] mc.html cached from", url.slice(0, 48), "…", buf.byteLength);
+      console.info("[n3xn sw] mc.html cached", buf.byteLength, "bytes");
       return;
     } catch (err) {
-      console.warn("[n3xn sw] mc try fail", String(err && err.message || err).slice(0, 80));
+      console.warn("[n3xn sw] mc try", String(err && err.message || err).slice(0, 100));
     }
   }
 
-  // Placeholder so /mc.html is not a hard 503 — guides user to terminal download
   const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft offline</title>
 <style>body{font-family:system-ui;background:#0a0a0f;color:#e2e8f0;padding:2rem;line-height:1.5}
 code{background:#1e293b;padding:2px 6px;border-radius:4px}</style></head>
 <body>
 <h1>Minecraft not cached yet</h1>
-<p>GitHub release downloads are often blocked in the browser (CORS).</p>
-<p>In n3xn terminal run:</p>
+<p>Run in n3xn terminal:</p>
 <pre><code>minecraft get 1.8-better
-minecraft open 1.8-better</code></pre>
-<p>Or place the HTML on your site as <code>/mc-source.html</code> and re-register the service worker.</p>
+minecraft offline</code></pre>
+<p>Ensure CF <code>_redirects</code> proxies <code>/github-assets/:tag/:file</code>.</p>
 </body></html>`;
   const html = new Response(tip, {
     status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: { "Content-Type": "text/html; charset=utf-8", "X-N3xn-Mc": "0" },
   });
+  // Only store tip if no real game cached
+  const existing = await cache.match("/mc.html");
+  if (existing) {
+    const x = existing.headers.get("X-N3xn-Mc");
+    if (x === "1") return;
+    const b = await existing.clone().arrayBuffer();
+    if (b.byteLength > 1000000) return;
+  }
   await cache.put(self.location.origin + "/mc.html", html.clone());
   await cache.put("/mc.html", html);
 }
@@ -364,15 +367,46 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // Offline Minecraft
+  // Offline Minecraft — never fall through to SPA index.html
   if (url.origin === self.location.origin && url.pathname === "/mc.html") {
     event.respondWith(
-      caches.open(SHELL).then(async (cache) => {
-        const hit = (await cache.match(req)) || (await cache.match("/mc.html"));
+      (async () => {
+        const cache = await caches.open(SHELL);
+        let hit = (await cache.match(req)) || (await cache.match("/mc.html"));
+        if (hit) {
+          try {
+            const buf = await hit.clone().arrayBuffer();
+            // Drop poisoned SPA cache entries
+            if (buf.byteLength < 500000) {
+              const sample = new TextDecoder().decode(buf.slice(0, 1500)).toLowerCase();
+              if (sample.includes("n3xn virtual") || sample.includes("<div id=\"app\"")) {
+                await cache.delete("/mc.html");
+                await cache.delete(self.location.origin + "/mc.html");
+                hit = null;
+              }
+            }
+          } catch (_) {}
+        }
+        if (!hit) {
+          await warmMinecraftOffline();
+          hit = (await cache.match("/mc.html")) || (await cache.match(self.location.origin + "/mc.html"));
+        }
         if (hit) return hit;
-        await warmMinecraftOffline();
-        return (await cache.match("/mc.html")) || new Response("/* mc.html not cached yet */", { status: 503 });
-      })
+        return new Response("mc.html not available — run: minecraft get 1.8-better", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
+        });
+      })()
+    );
+    return;
+  }
+
+  // Proxy path: let network handle /github-assets (CF _redirects); do not rewrite to index
+  if (url.origin === self.location.origin && url.pathname.startsWith("/github-assets/")) {
+    event.respondWith(
+      fetch(req).catch(
+        () => new Response("github-assets proxy failed", { status: 502 })
+      )
     );
     return;
   }
