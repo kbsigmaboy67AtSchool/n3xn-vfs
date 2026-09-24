@@ -1,20 +1,30 @@
 /**
- * n3xn VFS v2 — Media / Meme editor
- * Image, GIF frame, text overlays, crop, rotate, URL insert, export
+ * n3xn VFS v3 — Advanced Media & Meme Studio
+ * Interactive transform layers, vector annotations, visual cropping, & Undo/Redo history.
  */
-
 import * as fs from "./fs.js";
 
 let panel = null;
 let canvas = null;
 let ctx = null;
-let baseImage = null; // HTMLImageElement or ImageBitmap
-let layers = []; // { type:'text'|'image', ... }
-let selectedLayer = -1;
+
+// Editor State
+let baseImage = null; 
+let layers = []; 
+let selectedLayerIndex = -1;
 let rotation = 0;
-let crop = null; // {x,y,w,h} in image space
 let sourcePath = null;
-let dirty = false;
+let activeTool = "select"; // 'select' | 'crop' | 'pen' | 'marker' | 'eraser' | 'line' | 'rect' | 'ellipse' | 'arrow'
+let isDrawingOrTransforming = false;
+let currentPath = [];
+
+// Crop Tool State
+let cropRect = null; // { x, y, w, h }
+
+// History Engine
+const history = [];
+let historyIndex = -1;
+const MAX_HISTORY = 30;
 
 const FONTS = [
   "Impact, Haettenschweiler, sans-serif",
@@ -27,44 +37,20 @@ const FONTS = [
   "system-ui, sans-serif",
 ];
 
-function showPanelEl(el) {
-  if (!el) return;
-  // Drop .hidden entirely so theme.css `.hidden { display:none !important }` cannot win
-  el.className = el.id === "html-visual" ? "html-visual" : "media-editor";
-  el.removeAttribute("hidden");
-  el.style.setProperty("display", "flex", "important");
-  el.style.setProperty("position", "fixed", "important");
-  el.style.setProperty("left", "24px", "important");
-  el.style.setProperty("right", "24px", "important");
-  el.style.setProperty("top", "24px", "important");
-  el.style.setProperty("bottom", "24px", "important");
-  el.style.setProperty("z-index", "99999", "important");
-  el.style.setProperty("visibility", "visible", "important");
-  el.style.setProperty("opacity", "1", "important");
-  el.style.setProperty("pointer-events", "auto", "important");
-  el.style.setProperty("flex-direction", "column", "important");
-  el.style.setProperty("background", "#0a0a0f", "important");
-  el.style.setProperty("overflow", "hidden", "important");
-  el.style.setProperty("border", "1px solid #444", "important");
-  el.style.setProperty("border-radius", "6px", "important");
-}
-
-function hidePanelEl(el) {
-  if (!el) return;
-  el.className = (el.id === "html-visual" ? "html-visual" : "media-editor") + " hidden";
-  el.style.setProperty("display", "none", "important");
-  el.style.setProperty("visibility", "hidden", "important");
-  el.style.setProperty("pointer-events", "none", "important");
-}
+/* ==========================================================================
+   PUBLIC API
+   ========================================================================== */
 
 export function openMediaEditor(path) {
   try {
     sourcePath = path || null;
     ensurePanel();
     showPanelEl(panel);
+    setupKeyboardListeners();
+
     if (path) {
       loadFromPath(path).catch((e) => {
-        console.error(e);
+        console.error("VFS Load Error:", e);
         resetCanvas(800, 600);
       });
     } else {
@@ -78,6 +64,43 @@ export function openMediaEditor(path) {
 
 export function closeMediaEditor() {
   hidePanelEl(panel);
+  removeKeyboardListeners();
+}
+
+/* ==========================================================================
+   PANEL INITIALIZATION & LAYOUT
+   ========================================================================== */
+
+function showPanelEl(el) {
+  if (!el) return;
+  el.className = "media-editor";
+  el.removeAttribute("hidden");
+  Object.assign(el.style, {
+    display: "flex",
+    position: "fixed",
+    left: "16px",
+    right: "16px",
+    top: "16px",
+    bottom: "16px",
+    zIndex: "99999",
+    visibility: "visible",
+    opacity: "1",
+    pointerEvents: "auto",
+    flexDirection: "column",
+    background: "#0d0e15",
+    color: "#e2e8f0",
+    overflow: "hidden",
+    border: "1px solid #2d3748",
+    borderRadius: "8px",
+    boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.5)",
+    fontFamily: "system-ui, sans-serif",
+  });
+}
+
+function hidePanelEl(el) {
+  if (!el) return;
+  el.className = "media-editor hidden";
+  el.style.setProperty("display", "none", "important");
 }
 
 function ensurePanel() {
@@ -86,73 +109,89 @@ function ensurePanel() {
     ctx = canvas ? canvas.getContext("2d") : null;
     return;
   }
+
   panel = document.createElement("div");
   panel.id = "media-editor";
-  panel.className = "media-editor";
   panel.innerHTML = `
-    <div class="me-header">
-      <span class="me-title">Media / Meme Editor</span>
-      <div class="me-header-actions">
+    <div class="me-header" style="display:flex; justify-content:space-between; align-items:center; padding:8px 16px; background:#1a202c; border-bottom:1px solid #2d3748;">
+      <span class="me-title" style="font-weight:600; font-size:14px;">Media / Meme Studio v3</span>
+      <div class="me-header-actions" style="display:flex; gap:8px;">
+        <button type="button" class="btn small" id="me-undo" title="Undo (Ctrl+Z)">↶</button>
+        <button type="button" class="btn small" id="me-redo" title="Redo (Ctrl+Y)">↷</button>
         <button type="button" class="btn small" id="me-fs" title="Fullscreen">⛶</button>
         <button type="button" class="btn small ghost" id="me-close">✕</button>
       </div>
     </div>
-    <div class="me-body">
-      <div class="me-toolbar">
+    <div class="me-body" style="display:flex; flex:1; overflow:hidden;">
+      <div class="me-toolbar" style="display:flex; flex-direction:column; gap:6px; padding:10px; background:#141824; border-right:1px solid #2d3748; min-width:130px;">
+        <button type="button" class="btn small" id="me-tool-select">🎯 Select</button>
         <button type="button" class="btn small" id="me-load">Load</button>
         <button type="button" class="btn small" id="me-url">+ URL</button>
         <button type="button" class="btn small" id="me-text">+ Text</button>
         <button type="button" class="btn small" id="me-svg">+ SVG</button>
-        <button type="button" class="btn small" id="me-rotate">↻</button>
-        <button type="button" class="btn small" id="me-crop">Crop</button>
-        <span class="me-sep">|</span>
-        <button type="button" class="btn small" id="me-tool-pen" title="Pen">✏️</button>
-        <button type="button" class="btn small" id="me-tool-marker" title="Marker">▮</button>
-        <button type="button" class="btn small" id="me-tool-eraser" title="Eraser">⌫</button>
-        <button type="button" class="btn small" id="me-tool-line" title="Line">／</button>
-        <button type="button" class="btn small" id="me-tool-rect" title="Rect">▭</button>
-        <button type="button" class="btn small" id="me-tool-ellipse" title="Ellipse">◯</button>
-        <button type="button" class="btn small" id="me-tool-arrow" title="Arrow">→</button>
-        <input type="color" id="me-draw-color" value="#00f3ff" title="Stroke" />
-        <input type="range" id="me-draw-size" min="1" max="64" value="4" title="Size" style="width:72px" />
+        <button type="button" class="btn small" id="me-rotate">↻ 90°</button>
+        <button type="button" class="btn small" id="me-crop">✂️ Crop</button>
+        <hr style="border:0; border-top:1px solid #2d3748; margin:4px 0;" />
+        <button type="button" class="btn small" id="me-tool-pen">✏️ Pen</button>
+        <button type="button" class="btn small" id="me-tool-marker">▮ Marker</button>
+        <button type="button" class="btn small" id="me-tool-line">／ Line</button>
+        <button type="button" class="btn small" id="me-tool-rect">▭ Rect</button>
+        <button type="button" class="btn small" id="me-tool-ellipse">◯ Circle</button>
+        <button type="button" class="btn small" id="me-tool-arrow">→</button>
+        <div style="display:flex; flex-direction:column; gap:4px; margin-top:4px;">
+          <label style="font-size:10px; color:#a0aec0;">Stroke Color</label>
+          <input type="color" id="me-draw-color" value="#00f3ff" style="width:100%; height:28px; cursor:pointer;" />
+          <label style="font-size:10px; color:#a0aec0;">Stroke Size</label>
+          <input type="range" id="me-draw-size" min="1" max="64" value="4" style="width:100%;" />
+        </div>
+        <hr style="border:0; border-top:1px solid #2d3748; margin:4px 0;" />
         <button type="button" class="btn small primary" id="me-export">Export PNG</button>
         <button type="button" class="btn small" id="me-export-jpg">JPG</button>
-        <button type="button" class="btn small" id="me-save-vfs">Save to VFS</button>
+        <button type="button" class="btn small" id="me-save-vfs">Save VFS</button>
       </div>
-      <div class="me-workspace">
-        <div class="me-canvas-wrap">
-          <canvas id="me-canvas" width="800" height="600"></canvas>
+
+      <div class="me-workspace" style="display:flex; flex:1; overflow:hidden; background:#07080c; position:relative;">
+        <div class="me-canvas-wrap" style="flex:1; display:flex; align-items:center; justify-content:center; overflow:auto; padding:20px;">
+          <canvas id="me-canvas" width="800" height="600" style="box-shadow: 0 10px 30px rgba(0,0,0,0.8); background:#111; cursor:default;"></canvas>
         </div>
-        <div class="me-props">
-          <h4>Layer props</h4>
-          <label>Text</label>
-          <input type="text" id="me-prop-text" placeholder="Meme text" />
-          <label>Font</label>
-          <select id="me-prop-font"></select>
-          <label>Size</label>
-          <input type="number" id="me-prop-size" value="48" min="8" max="400" />
-          <label>Color</label>
-          <input type="color" id="me-prop-color" value="#ffffff" />
-          <label>Outline</label>
-          <input type="color" id="me-prop-stroke" value="#000000" />
-          <label>Background</label>
-          <input type="color" id="me-prop-bg" value="#000000" />
-          <label><input type="checkbox" id="me-prop-bg-on" /> Fill bg behind text</label>
-          <label>X</label>
-          <input type="number" id="me-prop-x" value="40" />
-          <label>Y</label>
-          <input type="number" id="me-prop-y" value="60" />
-          <div class="me-layer-list" id="me-layers"></div>
-          <button type="button" class="btn small ghost" id="me-del-layer">Delete layer</button>
+
+        <div class="me-props" style="width:240px; background:#141824; border-left:1px solid #2d3748; padding:12px; display:flex; flex-direction:column; gap:8px; overflow-y:auto;">
+          <h4 style="margin:0 0 6px 0; font-size:12px; text-transform:uppercase; color:#718096;">Layer Properties</h4>
+          <div id="me-text-props" style="display:flex; flex-direction:column; gap:6px;">
+            <label style="font-size:11px;">Text Content</label>
+            <input type="text" id="me-prop-text" placeholder="Meme text" />
+            <label style="font-size:11px;">Font</label>
+            <select id="me-prop-font"></select>
+            <div style="display:flex; gap:6px;">
+              <div style="flex:1;"><label style="font-size:11px;">Size</label><input type="number" id="me-prop-size" value="48" /></div>
+              <div style="flex:1;"><label style="font-size:11px;">Text Color</label><input type="color" id="me-prop-color" value="#ffffff" style="width:100%; height:26px;" /></div>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <div style="flex:1;"><label style="font-size:11px;">Outline</label><input type="color" id="me-prop-stroke" value="#000000" style="width:100%; height:26px;" /></div>
+              <div style="flex:1;"><label style="font-size:11px;">BG Color</label><input type="color" id="me-prop-bg" value="#000000" style="width:100%; height:26px;" /></div>
+            </div>
+            <label style="font-size:11px;"><input type="checkbox" id="me-prop-bg-on" /> Fill background</label>
+          </div>
+
+          <hr style="border:0; border-top:1px solid #2d3748; margin:4px 0;" />
+          <h4 style="margin:0; font-size:12px; text-transform:uppercase; color:#718096;">Layer Stack</h4>
+          <div class="me-layer-list" id="me-layers" style="flex:1; max-height:180px; overflow-y:auto; border:1px solid #2d3748; border-radius:4px; background:#0d0e15;"></div>
+          
+          <div style="display:flex; gap:4px;">
+            <button type="button" class="btn small" id="me-layer-up" title="Move Up">▲</button>
+            <button type="button" class="btn small" id="me-layer-down" title="Move Down">▼</button>
+            <button type="button" class="btn small ghost" id="me-del-layer" style="color:#e53e3e; margin-left:auto;">Delete</button>
+          </div>
         </div>
       </div>
     </div>
   `;
-  document.body.appendChild(panel);
 
+  document.body.appendChild(panel);
   canvas = panel.querySelector("#me-canvas");
   ctx = canvas.getContext("2d");
 
+  // Populate Font Selector
   const fontSel = panel.querySelector("#me-prop-font");
   FONTS.forEach((f) => {
     const o = document.createElement("option");
@@ -161,11 +200,29 @@ function ensurePanel() {
     fontSel.appendChild(o);
   });
 
+  bindEvents();
+}
+
+/* ==========================================================================
+   EVENT HANDLERS & INTERACTION ENGINE
+   ========================================================================== */
+
+function bindEvents() {
   panel.querySelector("#me-close").onclick = () => closeMediaEditor();
+  panel.querySelector("#me-undo").onclick = () => undo();
+  panel.querySelector("#me-redo").onclick = () => redo();
   panel.querySelector("#me-fs").onclick = () => {
     if (!document.fullscreenElement) panel.requestFullscreen?.();
     else document.exitFullscreen?.();
   };
+
+  // Tool Selection
+  const tools = ["select", "pen", "marker", "line", "rect", "ellipse", "arrow"];
+  tools.forEach((t) => {
+    const btn = panel.querySelector("#me-tool-" + t);
+    if (btn) btn.onclick = () => setTool(t);
+  });
+
   panel.querySelector("#me-load").onclick = async () => {
     const p = window.__n3xnActivePath || prompt("VFS path to load:");
     if (p) await loadFromPath(p);
@@ -175,326 +232,206 @@ function ensurePanel() {
   panel.querySelector("#me-svg").onclick = () => insertSvg();
   panel.querySelector("#me-rotate").onclick = () => {
     rotation = (rotation + 90) % 360;
+    saveHistoryState();
     redraw();
   };
-  panel.querySelector("#me-crop").onclick = () => startCrop();
+  panel.querySelector("#me-crop").onclick = () => enableCropMode();
   panel.querySelector("#me-export").onclick = () => exportImage("image/png");
   panel.querySelector("#me-export-jpg").onclick = () => exportImage("image/jpeg");
   panel.querySelector("#me-save-vfs").onclick = () => saveToVfs();
-  panel.querySelector("#me-del-layer").onclick = () => {
-    if (selectedLayer >= 0) {
-      layers.splice(selectedLayer, 1);
-      selectedLayer = -1;
-      redraw();
-      renderLayerList();
-    }
-  };
 
-  ["me-prop-text", "me-prop-font", "me-prop-size", "me-prop-color", "me-prop-stroke", "me-prop-bg", "me-prop-bg-on", "me-prop-x", "me-prop-y"].forEach((id) => {
+  // Layer Stack Controls
+  panel.querySelector("#me-del-layer").onclick = () => deleteSelectedLayer();
+  panel.querySelector("#me-layer-up").onclick = () => moveLayerOrder(-1);
+  panel.querySelector("#me-layer-down").onclick = () => moveLayerOrder(1);
+
+  // Property Inputs
+  ["me-prop-text", "me-prop-font", "me-prop-size", "me-prop-color", "me-prop-stroke", "me-prop-bg", "me-prop-bg-on"].forEach((id) => {
     const el = panel.querySelector("#" + id);
-    if (!el) return;
-    el.addEventListener("input", applyPropsToSelected);
-    el.addEventListener("change", applyPropsToSelected);
+    if (el) {
+      el.addEventListener("input", applyPropsToSelected);
+      el.addEventListener("change", applyPropsToSelected);
+    }
   });
 
+  // Pointer Interaction
+  canvas.addEventListener("pointerdown", handlePointerDown);
+  canvas.addEventListener("pointermove", handlePointerMove);
+  canvas.addEventListener("pointerup", handlePointerUp);
+}
 
-  // ---- Draw tools (mouse + multi-touch) ----
-  let drawTool = "none"; // pen|marker|eraser|line|rect|ellipse|arrow
-  let drawing = false;
-  let drawStart = null;
-  let strokePts = [];
-  let snapshot = null;
+function setTool(tool) {
+  activeTool = tool;
+  cropRect = null;
+  canvas.style.cursor = tool === "select" ? "default" : "crosshair";
+  redraw();
+}
 
-  function setDrawTool(t) {
-    drawTool = t;
-    ["pen","marker","eraser","line","rect","ellipse","arrow"].forEach((name) => {
-      const b = panel.querySelector("#me-tool-" + name);
-      if (b) b.classList.toggle("primary", drawTool === name);
-    });
-    canvas.style.cursor = drawTool === "none" ? "default" : "crosshair";
-  }
-  panel.querySelector("#me-tool-pen").onclick = () => setDrawTool(drawTool === "pen" ? "none" : "pen");
-  panel.querySelector("#me-tool-marker").onclick = () => setDrawTool(drawTool === "marker" ? "none" : "marker");
-  panel.querySelector("#me-tool-eraser").onclick = () => setDrawTool(drawTool === "eraser" ? "none" : "eraser");
-  panel.querySelector("#me-tool-line").onclick = () => setDrawTool(drawTool === "line" ? "none" : "line");
-  panel.querySelector("#me-tool-rect").onclick = () => setDrawTool(drawTool === "rect" ? "none" : "rect");
-  panel.querySelector("#me-tool-ellipse").onclick = () => setDrawTool(drawTool === "ellipse" ? "none" : "ellipse");
-  panel.querySelector("#me-tool-arrow").onclick = () => setDrawTool(drawTool === "arrow" ? "none" : "arrow");
+function getCanvasCoords(e) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: ((e.clientX - rect.left) / rect.width) * canvas.width,
+    y: ((e.clientY - rect.top) / rect.height) * canvas.height,
+  };
+}
 
-  function canvasXY(e) {
-    const rect = canvas.getBoundingClientRect();
-    const src = e.touches ? e.touches[0] : e;
-    if (!src) return null;
-    return {
-      x: ((src.clientX - rect.left) / rect.width) * canvas.width,
-      y: ((src.clientY - rect.top) / rect.height) * canvas.height,
-    };
+let activeDrag = null; // { type: 'move'|'resize', layerIndex, startX, startY, origX, origY, origW, origH }
+
+function handlePointerDown(e) {
+  const pt = getCanvasCoords(e);
+  isDrawingOrTransforming = true;
+
+  if (activeTool === "crop") {
+    cropRect = { x: pt.x, y: pt.y, w: 0, h: 0 };
+    return;
   }
 
-  function strokeStyle() {
+  if (activeTool === "select") {
+    // Check handles for selected layer
+    if (selectedLayerIndex >= 0) {
+      const L = layers[selectedLayerIndex];
+      const bounds = getLayerBounds(L);
+      if (bounds && isPointInHandle(pt, bounds.x + bounds.w, bounds.y + bounds.h)) {
+        activeDrag = { type: "resize", layerIndex: selectedLayerIndex, startX: pt.x, startY: pt.y, origW: L.w || bounds.w, origH: L.h || bounds.h };
+        return;
+      }
+    }
+
+    // Hit test layers from top to bottom
+    let hit = -1;
+    for (let i = layers.length - 1; i >= 0; i--) {
+      if (hitTestLayer(layers[i], pt)) {
+        hit = i;
+        break;
+      }
+    }
+
+    selectedLayerIndex = hit;
+    if (hit >= 0) {
+      const L = layers[hit];
+      activeDrag = { type: "move", layerIndex: hit, startX: pt.x, startY: pt.y, origX: L.x, origY: L.y };
+      fillProps(L);
+    }
+    renderLayerList();
+    redraw();
+    return;
+  }
+
+  // Vector shape / draw tools
+  currentPath = [pt];
+}
+
+function handlePointerMove(e) {
+  if (!isDrawingOrTransforming) return;
+  const pt = getCanvasCoords(e);
+
+  if (activeTool === "crop" && cropRect) {
+    cropRect.w = pt.x - cropRect.x;
+    cropRect.h = pt.y - cropRect.y;
+    redraw();
+    return;
+  }
+
+  if (activeTool === "select" && activeDrag) {
+    const dx = pt.x - activeDrag.startX;
+    const dy = pt.y - activeDrag.startY;
+    const L = layers[activeDrag.layerIndex];
+
+    if (activeDrag.type === "move") {
+      L.x = activeDrag.origX + dx;
+      L.y = activeDrag.origY + dy;
+    } else if (activeDrag.type === "resize") {
+      if (L.type === "text") {
+        L.size = Math.max(12, Math.round(activeDrag.origH + dy));
+      } else {
+        L.w = Math.max(20, activeDrag.origW + dx);
+        L.h = Math.max(20, activeDrag.origH + dy);
+      }
+    }
+    redraw();
+    return;
+  }
+
+  // Draw modes preview
+  if (["pen", "marker"].includes(activeTool)) {
+    currentPath.push(pt);
+    redraw();
+    drawPathPreview(currentPath);
+  } else if (["line", "rect", "ellipse", "arrow"].includes(activeTool)) {
+    redraw();
+    drawShapePreview(currentPath[0], pt);
+  }
+}
+
+function handlePointerUp(e) {
+  if (!isDrawingOrTransforming) return;
+  isDrawingOrTransforming = false;
+  const pt = getCanvasCoords(e);
+
+  if (activeTool === "crop") {
+    if (cropRect && Math.abs(cropRect.w) > 20 && Math.abs(cropRect.h) > 20) {
+      applyCrop(cropRect);
+    }
+    cropRect = null;
+    setTool("select");
+    return;
+  }
+
+  if (activeTool !== "select" && currentPath.length > 0) {
     const color = panel.querySelector("#me-draw-color")?.value || "#00f3ff";
     const size = Number(panel.querySelector("#me-draw-size")?.value || 4);
-    return { color, size };
-  }
 
-  function beginDraw(e) {
-    if (drawTool === "none") return false;
-    e.preventDefault();
-    const p = canvasXY(e);
-    if (!p) return true;
-    drawing = true;
-    drawStart = p;
-    strokePts = [p];
-    snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    return true;
-  }
+    layers.push({
+      type: "vector",
+      tool: activeTool,
+      pts: activeTool === "pen" || activeTool === "marker" ? currentPath : [currentPath[0], pt],
+      color,
+      size: activeTool === "marker" ? size * 3 : size,
+      alpha: activeTool === "marker" ? 0.35 : 1.0,
+      x: 0,
+      y: 0,
+    });
 
-  function moveDraw(e) {
-    if (!drawing || drawTool === "none") return false;
-    e.preventDefault();
-    const p = canvasXY(e);
-    if (!p) return true;
-    const { color, size } = strokeStyle();
-    if (drawTool === "pen" || drawTool === "marker" || drawTool === "eraser") {
-      const prev = strokePts[strokePts.length - 1];
-      strokePts.push(p);
-      ctx.save();
-      if (drawTool === "eraser") {
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.strokeStyle = "rgba(0,0,0,1)";
-      } else {
-        ctx.globalCompositeOperation = "source-over";
-        ctx.strokeStyle = color;
-        ctx.globalAlpha = drawTool === "marker" ? 0.35 : 1;
-      }
-      ctx.lineWidth = drawTool === "marker" ? size * 3 : size;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.beginPath();
-      ctx.moveTo(prev.x, prev.y);
-      ctx.lineTo(p.x, p.y);
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      // shape preview
-      ctx.putImageData(snapshot, 0, 0);
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = size;
-      ctx.lineCap = "round";
-      const x0 = drawStart.x, y0 = drawStart.y;
-      if (drawTool === "line" || drawTool === "arrow") {
-        ctx.beginPath();
-        ctx.moveTo(x0, y0);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-        if (drawTool === "arrow") {
-          const ang = Math.atan2(p.y - y0, p.x - x0);
-          const head = 10 + size * 2;
-          ctx.beginPath();
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x - head * Math.cos(ang - 0.4), p.y - head * Math.sin(ang - 0.4));
-          ctx.moveTo(p.x, p.y);
-          ctx.lineTo(p.x - head * Math.cos(ang + 0.4), p.y - head * Math.sin(ang + 0.4));
-          ctx.stroke();
-        }
-      } else if (drawTool === "rect") {
-        ctx.strokeRect(x0, y0, p.x - x0, p.y - y0);
-      } else if (drawTool === "ellipse") {
-        ctx.beginPath();
-        ctx.ellipse((x0 + p.x) / 2, (y0 + p.y) / 2, Math.abs(p.x - x0) / 2, Math.abs(p.y - y0) / 2, 0, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-    return true;
-  }
-
-  function endDraw(e) {
-    if (!drawing) return;
-    drawing = false;
-    snapshot = null;
-    // bake freehand into base by leaving pixels; for shapes already stroked
-    strokePts = [];
-  }
-
-  canvas.addEventListener("mousedown", (e) => { if (beginDraw(e)) e.stopPropagation(); });
-  canvas.addEventListener("mousemove", (e) => { moveDraw(e); });
-  window.addEventListener("mouseup", endDraw);
-  canvas.addEventListener("touchstart", (e) => { if (beginDraw(e)) e.stopPropagation(); }, { passive: false });
-  canvas.addEventListener("touchmove", (e) => { moveDraw(e); }, { passive: false });
-  canvas.addEventListener("touchend", endDraw);
-  canvas.addEventListener("touchcancel", endDraw);
-
-
-  // Drag layers
-  let drag = null;
-  canvas.addEventListener("mousedown", (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
-    const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
-    // hit test layers reverse
-    for (let i = layers.length - 1; i >= 0; i--) {
-      const L = layers[i];
-      if (L.type === "text") {
-        const w = ctx.measureText(L.text).width + 20;
-        const h = L.size + 10;
-        if (x >= L.x - 10 && x <= L.x + w && y >= L.y - L.size && y <= L.y + 10) {
-          selectedLayer = i;
-          drag = { i, ox: x - L.x, oy: y - L.y };
-          fillProps(L);
-          renderLayerList();
-          return;
-        }
-      }
-    }
-  });
-  canvas.addEventListener("mousemove", (e) => {
-    if (!drag) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
-    const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
-    layers[drag.i].x = x - drag.ox;
-    layers[drag.i].y = y - drag.oy;
-    document.getElementById("me-prop-x").value = Math.round(layers[drag.i].x);
-    document.getElementById("me-prop-y").value = Math.round(layers[drag.i].y);
+    currentPath = [];
+    selectedLayerIndex = layers.length - 1;
+    saveHistoryState();
+    renderLayerList();
     redraw();
-  });
-  window.addEventListener("mouseup", () => { drag = null; });
+  } else if (activeDrag) {
+    saveHistoryState();
+    activeDrag = null;
+  }
 }
 
-function resetCanvas(w, h) {
-  canvas.width = w;
-  canvas.height = h;
-  baseImage = null;
-  layers = [];
-  rotation = 0;
-  crop = null;
-  redraw();
-  renderLayerList();
-}
-
-async function loadFromPath(path) {
-  sourcePath = path;
-  const f = await fs.readFile(path);
-  if (!f) throw new Error("Not found");
-  const mime = f.mime || "image/png";
-  const blob = new Blob([f.content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  await loadImageUrl(url);
-  URL.revokeObjectURL(url);
-}
-
-function loadImageUrl(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => {
-      baseImage = img;
-      canvas.width = img.naturalWidth || img.width;
-      canvas.height = img.naturalHeight || img.height;
-      rotation = 0;
-      crop = null;
-      redraw();
-      resolve();
-    };
-    img.onerror = () => reject(new Error("Failed to load image"));
-    img.src = url;
-  });
-}
-
-function addTextLayer(text) {
-  const L = {
-    type: "text",
-    text: text || "TEXT",
-    font: FONTS[0],
-    size: 48,
-    color: "#ffffff",
-    stroke: "#000000",
-    bg: "#000000",
-    bgOn: false,
-    x: 40,
-    y: 60 + layers.length * 50,
-  };
-  layers.push(L);
-  selectedLayer = layers.length - 1;
-  fillProps(L);
-  redraw();
-  renderLayerList();
-}
-
-function fillProps(L) {
-  if (!L || L.type !== "text") return;
-  document.getElementById("me-prop-text").value = L.text;
-  document.getElementById("me-prop-font").value = L.font;
-  document.getElementById("me-prop-size").value = L.size;
-  document.getElementById("me-prop-color").value = L.color;
-  document.getElementById("me-prop-stroke").value = L.stroke;
-  document.getElementById("me-prop-bg").value = L.bg;
-  document.getElementById("me-prop-bg-on").checked = !!L.bgOn;
-  document.getElementById("me-prop-x").value = Math.round(L.x);
-  document.getElementById("me-prop-y").value = Math.round(L.y);
-}
-
-function applyPropsToSelected() {
-  if (selectedLayer < 0 || !layers[selectedLayer] || layers[selectedLayer].type !== "text") return;
-  const L = layers[selectedLayer];
-  L.text = document.getElementById("me-prop-text").value;
-  L.font = document.getElementById("me-prop-font").value;
-  L.size = +document.getElementById("me-prop-size").value || 48;
-  L.color = document.getElementById("me-prop-color").value;
-  L.stroke = document.getElementById("me-prop-stroke").value;
-  L.bg = document.getElementById("me-prop-bg").value;
-  L.bgOn = document.getElementById("me-prop-bg-on").checked;
-  L.x = +document.getElementById("me-prop-x").value || 0;
-  L.y = +document.getElementById("me-prop-y").value || 0;
-  dirty = true;
-  redraw();
-}
-
-function renderLayerList() {
-  const el = document.getElementById("me-layers");
-  el.innerHTML = layers
-    .map(
-      (L, i) =>
-        `<div class="me-layer ${i === selectedLayer ? "active" : ""}" data-i="${i}">${
-          L.type === "text" ? "T: " + (L.text || "").slice(0, 24) : "IMG"
-        }</div>`
-    )
-    .join("");
-  el.querySelectorAll(".me-layer").forEach((node) => {
-    node.onclick = () => {
-      selectedLayer = +node.dataset.i;
-      fillProps(layers[selectedLayer]);
-      renderLayerList();
-    };
-  });
-}
+/* ==========================================================================
+   RENDERING & CANVAS TRANSFORMATIONS
+   ========================================================================== */
 
 function redraw() {
   if (!ctx) return;
   const w = canvas.width;
   const h = canvas.height;
+
   ctx.save();
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = "#111";
+
+  // Canvas background
+  ctx.fillStyle = "#090a0f";
   ctx.fillRect(0, 0, w, h);
 
+  // Global canvas rotation
   ctx.translate(w / 2, h / 2);
   ctx.rotate((rotation * Math.PI) / 180);
   ctx.translate(-w / 2, -h / 2);
 
+  // Render Base Image
   if (baseImage) {
-    if (crop) {
-      ctx.drawImage(baseImage, crop.x, crop.y, crop.w, crop.h, 0, 0, w, h);
-    } else {
-      ctx.drawImage(baseImage, 0, 0, w, h);
-    }
+    ctx.drawImage(baseImage, 0, 0, w, h);
   }
 
-  // layers drawn in unrotated screen space relative to canvas after rotation transform
-  // For simplicity, text follows rotation with image
-  layers.forEach((L) => {
+  // Render Layers Stack
+  layers.forEach((L, idx) => {
+    ctx.save();
     if (L.type === "text") {
       ctx.font = `bold ${L.size}px ${L.font}`;
       ctx.textBaseline = "top";
@@ -510,89 +447,362 @@ function redraw() {
       ctx.fillText(L.text, L.x, L.y);
     } else if (L.type === "image" && L.img) {
       ctx.drawImage(L.img, L.x, L.y, L.w || L.img.width, L.h || L.img.height);
+    } else if (L.type === "vector") {
+      renderVectorLayer(L);
     }
+
+    // Draw Selection Bounds & Handles
+    if (idx === selectedLayerIndex && activeTool === "select") {
+      const b = getLayerBounds(L);
+      if (b) {
+        ctx.strokeStyle = "#00f3ff";
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(b.x - 4, b.y - 4, b.w + 8, b.h + 8);
+        ctx.setLineDash([]);
+        // Handle
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(b.x + b.w + 2, b.y + b.h + 2, 8, 8);
+        ctx.strokeRect(b.x + b.w + 2, b.y + b.h + 2, 8, 8);
+      }
+    }
+    ctx.restore();
   });
+
+  // Render Crop Overlay Preview
+  if (cropRect) {
+    ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+    ctx.fillRect(0, 0, w, h);
+    ctx.clearRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+    ctx.strokeStyle = "#00f3ff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cropRect.x, cropRect.y, cropRect.w, cropRect.h);
+  }
 
   ctx.restore();
 }
 
-async function insertFromUrl() {
-  const url = prompt("Image / GIF URL:");
-  if (!url) return;
-  try {
-    if (!baseImage) {
-      await loadImageUrl(url);
-    } else {
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      await new Promise((res, rej) => {
-        img.onload = res;
-        img.onerror = rej;
-        img.src = url;
-      });
-      layers.push({
-        type: "image",
-        img,
-        x: 20,
-        y: 20,
-        w: Math.min(img.width, canvas.width / 2),
-        h: Math.min(img.height, canvas.height / 2),
-      });
-      redraw();
-      renderLayerList();
-    }
-  } catch {
-    alert("Could not load URL (CORS may block it). Try downloading into VFS first.");
+function renderVectorLayer(L) {
+  ctx.save();
+  ctx.strokeStyle = L.color;
+  ctx.fillStyle = L.color;
+  ctx.lineWidth = L.size;
+  ctx.globalAlpha = L.alpha || 1.0;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  if (L.tool === "pen" || L.tool === "marker") {
+    ctx.beginPath();
+    L.pts.forEach((p, i) => {
+      if (i === 0) ctx.moveTo(p.x, p.y);
+      else ctx.lineTo(p.x, p.y);
+    });
+    ctx.stroke();
+  } else if (L.tool === "line") {
+    ctx.beginPath();
+    ctx.moveTo(L.pts[0].x, L.pts[0].y);
+    ctx.lineTo(L.pts[1].x, L.pts[1].y);
+    ctx.stroke();
+  } else if (L.tool === "rect") {
+    ctx.strokeRect(L.pts[0].x, L.pts[0].y, L.pts[1].x - L.pts[0].x, L.pts[1].y - L.pts[0].y);
+  } else if (L.tool === "ellipse") {
+    const x0 = L.pts[0].x, y0 = L.pts[0].y, x1 = L.pts[1].x, y1 = L.pts[1].y;
+    ctx.beginPath();
+    ctx.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  } else if (L.tool === "arrow") {
+    const p0 = L.pts[0], p1 = L.pts[1];
+    ctx.beginPath();
+    ctx.moveTo(p0.x, p0.y);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+    const ang = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+    const head = 10 + L.size * 2;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p1.x - head * Math.cos(ang - 0.4), p1.y - head * Math.sin(ang - 0.4));
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p1.x - head * Math.cos(ang + 0.4), p1.y - head * Math.sin(ang + 0.4));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* Helper preview during drawing */
+function drawPathPreview(pts) {
+  ctx.save();
+  ctx.strokeStyle = panel.querySelector("#me-draw-color").value;
+  ctx.lineWidth = Number(panel.querySelector("#me-draw-size").value);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawShapePreview(p0, p1) {
+  renderVectorLayer({
+    tool: activeTool,
+    pts: [p0, p1],
+    color: panel.querySelector("#me-draw-color").value,
+    size: Number(panel.querySelector("#me-draw-size").value),
+    alpha: 1.0,
+  });
+}
+
+/* ==========================================================================
+   HIT TESTING & BOUNDS CALCULATIONS
+   ========================================================================== */
+
+function getLayerBounds(L) {
+  if (!L) return null;
+  if (L.type === "text") {
+    ctx.font = `bold ${L.size}px ${L.font}`;
+    const m = ctx.measureText(L.text || "");
+    return { x: L.x, y: L.y, w: m.width, h: L.size };
+  }
+  if (L.type === "image") {
+    return { x: L.x, y: L.y, w: L.w || L.img?.width || 100, h: L.h || L.img?.height || 100 };
+  }
+  if (L.type === "vector") {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    L.pts.forEach((p) => {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    });
+    return { x: minX, y: minY, w: maxX - minX || 10, h: maxY - minY || 10 };
+  }
+  return null;
+}
+
+function hitTestLayer(L, pt) {
+  const b = getLayerBounds(L);
+  if (!b) return false;
+  return pt.x >= b.x - 6 && pt.x <= b.x + b.w + 6 && pt.y >= b.y - 6 && pt.y <= b.y + b.h + 6;
+}
+
+function isPointInHandle(pt, hX, hY) {
+  return Math.abs(pt.x - hX) <= 10 && Math.abs(pt.y - hY) <= 10;
+}
+
+/* ==========================================================================
+   HISTORY, CROP & STATE MANAGEMENT
+   ========================================================================== */
+
+function saveHistoryState() {
+  const state = {
+    layers: JSON.parse(JSON.stringify(layers.map((l) => (l.type === "image" ? { ...l, imgUrl: l.img.src } : l)))),
+    rotation,
+    canvasW: canvas.width,
+    canvasH: canvas.height,
+  };
+
+  history.splice(historyIndex + 1);
+  history.push(state);
+  if (history.length > MAX_HISTORY) history.shift();
+  historyIndex = history.length - 1;
+}
+
+async function undo() {
+  if (historyIndex > 0) {
+    historyIndex--;
+    await restoreHistoryState(history[historyIndex]);
   }
 }
 
-async function insertSvg() {
-  const code = prompt("Paste SVG markup:");
-  if (!code) return;
-  const blob = new Blob([code], { type: "image/svg+xml" });
-  const url = URL.createObjectURL(blob);
-  try {
-    if (!baseImage) await loadImageUrl(url);
-    else {
-      const img = new Image();
-      await new Promise((res, rej) => {
-        img.onload = res;
-        img.onerror = rej;
-        img.src = url;
-      });
-      layers.push({ type: "image", img, x: 20, y: 20, w: img.width, h: img.height });
-      redraw();
-      renderLayerList();
-    }
-  } finally {
-    URL.revokeObjectURL(url);
+async function redo() {
+  if (historyIndex < history.length - 1) {
+    historyIndex++;
+    await restoreHistoryState(history[historyIndex]);
   }
 }
 
-function startCrop() {
-  const x = +prompt("Crop X", "0");
-  const y = +prompt("Crop Y", "0");
-  const w = +prompt("Crop width", String(canvas.width));
-  const h = +prompt("Crop height", String(canvas.height));
-  if ([x, y, w, h].some((n) => Number.isNaN(n))) return;
-  // Bake current canvas then set as new base
+async function restoreHistoryState(state) {
+  canvas.width = state.canvasW;
+  canvas.height = state.canvasH;
+  rotation = state.rotation;
+
+  layers = await Promise.all(
+    state.layers.map(async (l) => {
+      if (l.type === "image" && l.imgUrl) {
+        const img = new Image();
+        img.src = l.imgUrl;
+        await new Promise((res) => (img.onload = res));
+        return { ...l, img };
+      }
+      return l;
+    })
+  );
+
+  selectedLayerIndex = -1;
+  renderLayerList();
+  redraw();
+}
+
+function applyCrop(rect) {
+  const rx = Math.max(0, Math.min(rect.x, rect.x + rect.w));
+  const ry = Math.max(0, Math.min(rect.y, rect.y + rect.h));
+  const rw = Math.abs(rect.w);
+  const rh = Math.abs(rect.h);
+
   const tmp = document.createElement("canvas");
-  tmp.width = w;
-  tmp.height = h;
+  tmp.width = rw;
+  tmp.height = rh;
   const tctx = tmp.getContext("2d");
-  tctx.drawImage(canvas, x, y, w, h, 0, 0, w, h);
+  tctx.drawImage(canvas, rx, ry, rw, rh, 0, 0, rw, rh);
+
   const img = new Image();
   img.onload = () => {
     baseImage = img;
-    canvas.width = w;
-    canvas.height = h;
+    canvas.width = rw;
+    canvas.height = rh;
     layers = [];
     rotation = 0;
-    crop = null;
-    redraw();
+    saveHistoryState();
     renderLayerList();
+    redraw();
   };
   img.src = tmp.toDataURL("image/png");
+}
+
+/* ==========================================================================
+   UI / LAYER HELPERS & EXPORT
+   ========================================================================== */
+
+function resetCanvas(w, h) {
+  canvas.width = w;
+  canvas.height = h;
+  baseImage = null;
+  layers = [];
+  rotation = 0;
+  saveHistoryState();
+  redraw();
+  renderLayerList();
+}
+
+function deleteSelectedLayer() {
+  if (selectedLayerIndex >= 0) {
+    layers.splice(selectedLayerIndex, 1);
+    selectedLayerIndex = -1;
+    saveHistoryState();
+    redraw();
+    renderLayerList();
+  }
+}
+
+function moveLayerOrder(dir) {
+  if (selectedLayerIndex < 0) return;
+  const target = selectedLayerIndex + dir;
+  if (target >= 0 && target < layers.length) {
+    const temp = layers[selectedLayerIndex];
+    layers[selectedLayerIndex] = layers[target];
+    layers[target] = temp;
+    selectedLayerIndex = target;
+    saveHistoryState();
+    redraw();
+    renderLayerList();
+  }
+}
+
+function addTextLayer(text) {
+  const L = {
+    type: "text",
+    text: text || "TEXT",
+    font: FONTS[0],
+    size: 48,
+    color: "#ffffff",
+    stroke: "#000000",
+    bg: "#000000",
+    bgOn: false,
+    x: canvas.width / 4,
+    y: canvas.height / 4,
+  };
+  layers.push(L);
+  selectedLayerIndex = layers.length - 1;
+  fillProps(L);
+  saveHistoryState();
+  redraw();
+  renderLayerList();
+}
+
+function fillProps(L) {
+  if (!L || L.type !== "text") return;
+  panel.querySelector("#me-prop-text").value = L.text;
+  panel.querySelector("#me-prop-font").value = L.font;
+  panel.querySelector("#me-prop-size").value = L.size;
+  panel.querySelector("#me-prop-color").value = L.color;
+  panel.querySelector("#me-prop-stroke").value = L.stroke;
+  panel.querySelector("#me-prop-bg").value = L.bg;
+  panel.querySelector("#me-prop-bg-on").checked = !!L.bgOn;
+}
+
+function applyPropsToSelected() {
+  if (selectedLayerIndex < 0 || layers[selectedLayerIndex]?.type !== "text") return;
+  const L = layers[selectedLayerIndex];
+  L.text = panel.querySelector("#me-prop-text").value;
+  L.font = panel.querySelector("#me-prop-font").value;
+  L.size = +panel.querySelector("#me-prop-size").value || 48;
+  L.color = panel.querySelector("#me-prop-color").value;
+  L.stroke = panel.querySelector("#me-prop-stroke").value;
+  L.bg = panel.querySelector("#me-prop-bg").value;
+  L.bgOn = panel.querySelector("#me-prop-bg-on").checked;
+  redraw();
+}
+
+function renderLayerList() {
+  const el = panel.querySelector("#me-layers");
+  el.innerHTML = layers
+    .map(
+      (L, i) =>
+        `<div class="me-layer ${i === selectedLayerIndex ? "active" : ""}" data-i="${i}" style="padding:4px 8px; font-size:11px; border-bottom:1px solid #1a202c; cursor:pointer; background:${i === selectedLayerIndex ? "#2b6cb0" : "transparent"}">
+          ${L.type === "text" ? "T: " + (L.text || "").slice(0, 16) : L.type === "vector" ? "✒️ " + L.tool : "🖼️ Image"}
+        </div>`
+    )
+    .reverse()
+    .join("");
+
+  el.querySelectorAll(".me-layer").forEach((node) => {
+    node.onclick = () => {
+      selectedLayerIndex = +node.dataset.i;
+      fillProps(layers[selectedLayerIndex]);
+      renderLayerList();
+      redraw();
+    };
+  });
+}
+
+/* ==========================================================================
+   VFS LOAD / SAVE & EXPORT
+   ========================================================================== */
+
+async function loadFromPath(path) {
+  sourcePath = path;
+  const f = await fs.readFile(path);
+  if (!f) throw new Error("File not found in VFS");
+  const blob = new Blob([f.content], { type: f.mime || "image/png" });
+  const url = URL.createObjectURL(blob);
+  await loadImageUrl(url);
+  URL.revokeObjectURL(url);
+}
+
+function loadImageUrl(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      baseImage = img;
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      rotation = 0;
+      saveHistoryState();
+      redraw();
+      resolve();
+    };
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = url;
+  });
 }
 
 function exportImage(mime) {
@@ -601,18 +811,6 @@ function exportImage(mime) {
   a.href = url;
   a.download = `n3xn-meme-${Date.now()}.${mime.includes("jpeg") ? "jpg" : "png"}`;
   a.click();
-  // also register as blob message
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    const burl = URL.createObjectURL(blob);
-    const el = document.getElementById("terminal-output");
-    if (el) {
-      const line = document.createElement("div");
-      line.className = "ok";
-      line.innerHTML = `[meme export] <a href="${burl}" target="_blank" style="color:#8cf">${burl}</a>`;
-      el.appendChild(line);
-    }
-  }, mime);
 }
 
 async function saveToVfs() {
@@ -620,7 +818,7 @@ async function saveToVfs() {
   if (!name) return;
   const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
   const buf = await blob.arrayBuffer();
-  // ensure parent dirs
+
   const parts = name.split("/").filter(Boolean);
   parts.pop();
   let cur = "";
@@ -628,46 +826,46 @@ async function saveToVfs() {
     cur += "/" + p;
     if (!fs.exists(cur)) await fs.mkdir(cur);
   }
+
   await fs.writeFile(name, new Uint8Array(buf), { mime: "image/png" });
   if (window.refreshTree) window.refreshTree();
-  alert("Saved " + name);
+  alert("Saved: " + name);
 }
 
-/* ========== Simple audio / video panel ========== */
-export function openAVEditor(path, kind) {
-  ensurePanel();
-  showPanelEl(panel);
-  const wrap = panel.querySelector(".me-canvas-wrap");
-  if (!wrap) return;
-  wrap.innerHTML = "";
-  const media = document.createElement(kind === "audio" ? "audio" : "video");
-  media.controls = true;
-  media.style.maxWidth = "100%";
-  media.style.maxHeight = "70vh";
-  (async () => {
-    const f = await fs.readFile(path);
-    const blob = new Blob([f.content], { type: f.mime || (kind === "audio" ? "audio/mpeg" : "video/mp4") });
-    media.src = URL.createObjectURL(blob);
-    wrap.appendChild(media);
-    const tools = document.createElement("div");
-    tools.style.padding = "8px";
-    tools.innerHTML = `
-      <p style="color:#888;font-size:12px">Playback + export blob. Trim: set start/end (seconds) then Export clip (video/audio copy via MediaRecorder when possible).</p>
-      <label>Start <input type="number" id="av-start" value="0" step="0.1" style="width:80px"/></label>
-      <label>End <input type="number" id="av-end" value="0" step="0.1" style="width:80px"/></label>
-      <button class="btn small" id="av-blob">Open as blob</button>
-    `;
-    wrap.appendChild(tools);
-    document.getElementById("av-blob").onclick = () => {
-      const url = media.src;
-      const el = document.getElementById("terminal-output");
-      if (el) {
-        const line = document.createElement("div");
-        line.className = "ok";
-        line.innerHTML = `[av] ${path} <a href="${url}" target="_blank" style="color:#8cf">${url}</a>`;
-        el.appendChild(line);
-      }
-      window.open(url, "_blank");
-    };
-  })();
+/* ==========================================================================
+   KEYBOARD SHORTCUTS
+   ========================================================================== */
+
+function handleKeyDown(e) {
+  if (document.activeElement?.tagName === "INPUT") return;
+
+  if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+  } else if ((e.ctrlKey || e.metaKey) && e.key === "y") {
+    e.preventDefault();
+    redo();
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    deleteSelectedLayer();
+  } else if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+    if (selectedLayerIndex >= 0) {
+      e.preventDefault();
+      const step = e.shiftKey ? 10 : 1;
+      const L = layers[selectedLayerIndex];
+      if (e.key === "ArrowLeft") L.x -= step;
+      if (e.key === "ArrowRight") L.x += step;
+      if (e.key === "ArrowUp") L.y -= step;
+      if (e.key === "ArrowDown") L.y += step;
+      redraw();
+    }
+  }
+}
+
+function setupKeyboardListeners() {
+  window.addEventListener("keydown", handleKeyDown);
+}
+
+function removeKeyboardListeners() {
+  window.removeEventListener("keydown", handleKeyDown);
 }
