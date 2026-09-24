@@ -105,6 +105,16 @@ function ensurePanel() {
         <button type="button" class="btn small" id="me-svg">+ SVG</button>
         <button type="button" class="btn small" id="me-rotate">↻</button>
         <button type="button" class="btn small" id="me-crop">Crop</button>
+        <span class="me-sep">|</span>
+        <button type="button" class="btn small" id="me-tool-pen" title="Pen">✏️</button>
+        <button type="button" class="btn small" id="me-tool-marker" title="Marker">▮</button>
+        <button type="button" class="btn small" id="me-tool-eraser" title="Eraser">⌫</button>
+        <button type="button" class="btn small" id="me-tool-line" title="Line">／</button>
+        <button type="button" class="btn small" id="me-tool-rect" title="Rect">▭</button>
+        <button type="button" class="btn small" id="me-tool-ellipse" title="Ellipse">◯</button>
+        <button type="button" class="btn small" id="me-tool-arrow" title="Arrow">→</button>
+        <input type="color" id="me-draw-color" value="#00f3ff" title="Stroke" />
+        <input type="range" id="me-draw-size" min="1" max="64" value="4" title="Size" style="width:72px" />
         <button type="button" class="btn small primary" id="me-export">Export PNG</button>
         <button type="button" class="btn small" id="me-export-jpg">JPG</button>
         <button type="button" class="btn small" id="me-save-vfs">Save to VFS</button>
@@ -186,6 +196,136 @@ function ensurePanel() {
     el.addEventListener("input", applyPropsToSelected);
     el.addEventListener("change", applyPropsToSelected);
   });
+
+
+  // ---- Draw tools (mouse + multi-touch) ----
+  let drawTool = "none"; // pen|marker|eraser|line|rect|ellipse|arrow
+  let drawing = false;
+  let drawStart = null;
+  let strokePts = [];
+  let snapshot = null;
+
+  function setDrawTool(t) {
+    drawTool = t;
+    ["pen","marker","eraser","line","rect","ellipse","arrow"].forEach((name) => {
+      const b = panel.querySelector("#me-tool-" + name);
+      if (b) b.classList.toggle("primary", drawTool === name);
+    });
+    canvas.style.cursor = drawTool === "none" ? "default" : "crosshair";
+  }
+  panel.querySelector("#me-tool-pen").onclick = () => setDrawTool(drawTool === "pen" ? "none" : "pen");
+  panel.querySelector("#me-tool-marker").onclick = () => setDrawTool(drawTool === "marker" ? "none" : "marker");
+  panel.querySelector("#me-tool-eraser").onclick = () => setDrawTool(drawTool === "eraser" ? "none" : "eraser");
+  panel.querySelector("#me-tool-line").onclick = () => setDrawTool(drawTool === "line" ? "none" : "line");
+  panel.querySelector("#me-tool-rect").onclick = () => setDrawTool(drawTool === "rect" ? "none" : "rect");
+  panel.querySelector("#me-tool-ellipse").onclick = () => setDrawTool(drawTool === "ellipse" ? "none" : "ellipse");
+  panel.querySelector("#me-tool-arrow").onclick = () => setDrawTool(drawTool === "arrow" ? "none" : "arrow");
+
+  function canvasXY(e) {
+    const rect = canvas.getBoundingClientRect();
+    const src = e.touches ? e.touches[0] : e;
+    if (!src) return null;
+    return {
+      x: ((src.clientX - rect.left) / rect.width) * canvas.width,
+      y: ((src.clientY - rect.top) / rect.height) * canvas.height,
+    };
+  }
+
+  function strokeStyle() {
+    const color = panel.querySelector("#me-draw-color")?.value || "#00f3ff";
+    const size = Number(panel.querySelector("#me-draw-size")?.value || 4);
+    return { color, size };
+  }
+
+  function beginDraw(e) {
+    if (drawTool === "none") return false;
+    e.preventDefault();
+    const p = canvasXY(e);
+    if (!p) return true;
+    drawing = true;
+    drawStart = p;
+    strokePts = [p];
+    snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    return true;
+  }
+
+  function moveDraw(e) {
+    if (!drawing || drawTool === "none") return false;
+    e.preventDefault();
+    const p = canvasXY(e);
+    if (!p) return true;
+    const { color, size } = strokeStyle();
+    if (drawTool === "pen" || drawTool === "marker" || drawTool === "eraser") {
+      const prev = strokePts[strokePts.length - 1];
+      strokePts.push(p);
+      ctx.save();
+      if (drawTool === "eraser") {
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.strokeStyle = "rgba(0,0,0,1)";
+      } else {
+        ctx.globalCompositeOperation = "source-over";
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = drawTool === "marker" ? 0.35 : 1;
+      }
+      ctx.lineWidth = drawTool === "marker" ? size * 3 : size;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.beginPath();
+      ctx.moveTo(prev.x, prev.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      // shape preview
+      ctx.putImageData(snapshot, 0, 0);
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = size;
+      ctx.lineCap = "round";
+      const x0 = drawStart.x, y0 = drawStart.y;
+      if (drawTool === "line" || drawTool === "arrow") {
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(p.x, p.y);
+        ctx.stroke();
+        if (drawTool === "arrow") {
+          const ang = Math.atan2(p.y - y0, p.x - x0);
+          const head = 10 + size * 2;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x - head * Math.cos(ang - 0.4), p.y - head * Math.sin(ang - 0.4));
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p.x - head * Math.cos(ang + 0.4), p.y - head * Math.sin(ang + 0.4));
+          ctx.stroke();
+        }
+      } else if (drawTool === "rect") {
+        ctx.strokeRect(x0, y0, p.x - x0, p.y - y0);
+      } else if (drawTool === "ellipse") {
+        ctx.beginPath();
+        ctx.ellipse((x0 + p.x) / 2, (y0 + p.y) / 2, Math.abs(p.x - x0) / 2, Math.abs(p.y - y0) / 2, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    return true;
+  }
+
+  function endDraw(e) {
+    if (!drawing) return;
+    drawing = false;
+    snapshot = null;
+    // bake freehand into base by leaving pixels; for shapes already stroked
+    strokePts = [];
+  }
+
+  canvas.addEventListener("mousedown", (e) => { if (beginDraw(e)) e.stopPropagation(); });
+  canvas.addEventListener("mousemove", (e) => { moveDraw(e); });
+  window.addEventListener("mouseup", endDraw);
+  canvas.addEventListener("touchstart", (e) => { if (beginDraw(e)) e.stopPropagation(); }, { passive: false });
+  canvas.addEventListener("touchmove", (e) => { moveDraw(e); }, { passive: false });
+  canvas.addEventListener("touchend", endDraw);
+  canvas.addEventListener("touchcancel", endDraw);
+
 
   // Drag layers
   let drag = null;
