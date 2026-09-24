@@ -16,6 +16,7 @@ const EXT_LANG = {
   cc: "cpp",
   cxx: "cpp",
   hpp: "cpp",
+  hh: "cpp",
   rs: "rust",
   go: "go",
   lua: "lua",
@@ -121,7 +122,9 @@ async function ensureLua() {
     await new Promise((resolve, reject) => {
       if (window.Wasmoon || window.wasmoon) return resolve();
       const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/index.js";
+      s.src = (navigator.serviceWorker?.controller
+        ? "/__cdn__/jsdelivr/npm/wasmoon@1.16.0/dist/index.js"
+        : "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/index.js");
       s.onload = resolve;
       s.onerror = () => reject(new Error("Failed to load Wasmoon (Lua)"));
       document.head.appendChild(s);
@@ -132,7 +135,11 @@ async function ensureLua() {
       window.LuaFactory;
     if (!factory) {
       // ESM dynamic fallback
-      const mod = await import("https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/+esm");
+      const mod = await import(
+        navigator.serviceWorker?.controller
+          ? "/__cdn__/jsdelivr/npm/wasmoon@1.16.0/+esm"
+          : "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/+esm"
+      );
       window.__n3xnLuaFactory = mod.LuaFactory || mod.default?.LuaFactory || mod.default;
     } else {
       window.__n3xnLuaFactory = factory;
