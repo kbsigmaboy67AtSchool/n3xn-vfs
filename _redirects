@@ -1,4 +1,9 @@
-# Static assets must not fall through to index.html
+# Same-origin proxy for release assets (status 200 = reverse proxy on CF Pages)
+# Request: /github-assets/MINECRAFT/file.html → GitHub release download
+/github-assets/:tag/:file  https://github.com/kbsigmaboy67AtSchool/minecraft/releases/download/:tag/:file  200
+
+# Never SPA-fallback these
 /sw.js  /sw.js  200
 /manifest.webmanifest  /manifest.webmanifest  200
-/github-assets/* https://github.com/kbsigmaboy67AtSchool/minecraft/releases/download/:splat 200!
+/mc.html  /mc.html  200
+/n3xn-chat.html  /n3xn-chat.html  200
