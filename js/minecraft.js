@@ -8,11 +8,29 @@ const TAG_SKINS = "minecraft_skins";
 
 /** Base path only used at fetch time (not shown to users) */
 function assetUrl(tag, file) {
-  // release download CDN path (obfuscated construction)
-  const host = ["git", "hub", ".com"].join("");
-  const user = ["kbsigmaboy", "67AtSchool"].join("");
-  const repo = "minecraft";
-  return `https://${host}/${user}/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(file)}`;
+  return `/github-assets/${encodeURIComponent(tag)}/${encodeURIComponent(file)}`;
+}
+
+/**
+ * CORS Proxy helper to bypass GitHub Release fetch blocks
+ */
+async function fetchWithProxy(targetUrl) {
+  const proxies = [
+    `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`
+  ];
+
+  for (const proxyUrl of proxies) {
+    try {
+      const res = await fetch(proxyUrl, { redirect: "follow" });
+      if (res.ok) return res;
+    } catch (e) {
+      console.warn("CORS proxy attempt failed, retrying fallback...", proxyUrl, e);
+    }
+  }
+
+  // Fallback direct fetch attempt
+  return await fetch(targetUrl, { mode: "cors", credentials: "omit", redirect: "follow" });
 }
 
 /** User-facing catalog — ids only, no upstream paths */
@@ -74,7 +92,7 @@ export function listSkins() {
 }
 
 /**
- * Fetch asset → Blob + object URL. Does not reveal upstream URL in return value.
+ * Fetch asset → Blob + object URL. Bypasses CORS via proxy.
  */
 export async function fetchMcAsset(kind, key, onProgress) {
   let file, filename, tag;
@@ -90,14 +108,18 @@ export async function fetchMcAsset(kind, key, onProgress) {
     filename = v.file;
     tag = TAG_GAME;
   }
-  const url = assetUrl(tag, file);
+
+  const rawUrl = assetUrl(tag, file);
   onProgress?.("Downloading " + filename + "…");
-  const res = await fetch(url, { mode: "cors", credentials: "omit", redirect: "follow" });
+
+  const res = await fetchWithProxy(rawUrl);
   if (!res.ok) throw new Error("Download failed (" + res.status + ") for " + filename);
+
   const buf = await res.arrayBuffer();
   const mime = filename.endsWith(".png") ? "image/png" : "text/html; charset=utf-8";
   const blob = new Blob([buf], { type: mime });
   const blobUrl = URL.createObjectURL(blob);
+
   // If this is the recommended offline build, seed SW cache as /mc.html
   try {
     if (filename.includes("wasm-gc.1.8.better") && "caches" in self) {
@@ -128,10 +150,24 @@ export function downloadBlob(blob, filename) {
 }
 
 export async function openMcInTab(key) {
-  const { blobUrl, filename } = await fetchMcAsset("game", key);
-  const w = window.open(blobUrl, "_blank");
+  // Open window early to prevent popup blocker triggers
+  const w = window.open("", "_blank");
   if (!w) throw new Error("Popup blocked — allow popups, or use: minecraft get " + (key || "1.8-better"));
-  return { blobUrl, filename };
+
+  try {
+    const { blob, blobUrl, filename } = await fetchMcAsset("game", key);
+    
+    // Write HTML content directly into the window document to bypass blob origin restrictions
+    const text = await blob.text();
+    w.document.open();
+    w.document.write(text);
+    w.document.close();
+
+    return { blobUrl, filename };
+  } catch (err) {
+    w.close();
+    throw err;
+  }
 }
 
 /** Offline SW path for recommended build */
