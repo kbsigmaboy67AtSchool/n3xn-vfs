@@ -1,5 +1,5 @@
-/* n3xn VFS SW v9 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, n3xn-chat) */
-const SHELL = "n3xn-shell-v9";
+/* n3xn VFS SW v7 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, V0RT3X) */
+const SHELL = "n3xn-shell-v10";
 const MONACO = "n3xn-monaco-v4";
 const PYODIDE_CACHE = "n3xn-pyodide-v1";
 const CDN_CACHE = "n3xn-cdn-v1";
@@ -10,14 +10,18 @@ const CDN = "https://cdn.jsdelivr.net/";
 const VER = "monaco-editor@0.52.0";
 const PY_VER = "v0.26.2";
 const PY_CDN = "https://cdn.jsdelivr.net/pyodide/" + PY_VER + "/full/";
-
-const N3XN_CHAT_SRC = "https://kbsigmaboy67atschool.github.io/V0RT3X-C0D3S/";
+const VORTEX_GITHUB_URL =
+  "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
 
 const MC_OFFLINE_FILE = "Xclounkit234X.wasm-gc.1.8.better.version.html";
 const MC_OFFLINE_URL = (() => {
   const host = ["git", "hub", ".com"].join("");
   const user = ["kbsigmaboy", "67AtSchool"].join("");
   return "https://" + host + "/" + user + "/minecraft/releases/download/MINECRAFT/" + MC_OFFLINE_FILE;
+})();
+const N3XN_CHAT_SRC = (() => {
+  // preferred path after rename; fallback to V0RT3X jsdelivr
+  return "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
 })();
 
 const FLAGS_URL = self.location.origin + "/__n3xn_sw_flags__";
@@ -30,8 +34,8 @@ let offlineCdn = true;
 const SHELL_URLS = [
   "./",
   "./index.html",
-  "./n3xn-chat.html",
   "./V0RT3X_chat.html",
+  "./n3xn-chat.html",
   "./mc.html",
   "./manifest.webmanifest",
   "./css/theme.css",
@@ -117,6 +121,7 @@ self.addEventListener("install", (event) => {
       const cache = await caches.open(SHELL);
       await Promise.all(SHELL_URLS.map((u) => cache.add(u).catch(() => null)));
       await warmMonaco();
+      await warmVortexChat();
       await warmN3xnChat();
       await warmMinecraftOffline();
       await warmExternal();
@@ -223,30 +228,66 @@ async function warmMonaco() {
   );
 }
 
+
 async function warmMinecraftOffline() {
   const cache = await caches.open(SHELL);
+  // GitHub release assets often block CORS — try several strategies
+  const candidates = [];
+  try { candidates.push(MC_OFFLINE_URL); } catch (_) {}
+  // jsDelivr release-style (works when tag+file published to repo path; may 404 for pure release assets)
   try {
-    const res = await fetch(MC_OFFLINE_URL, { mode: "cors", credentials: "omit" });
-    if (!res.ok) {
-      console.warn("[n3xn sw] mc offline fetch", res.status);
+    const host = ["cdn.", "jsdelivr.", "net"].join("");
+    candidates.push("https://" + host + "/gh/kbsigmaboy67AtSchool/minecraft@MINECRAFT/" + MC_OFFLINE_FILE);
+  } catch (_) {}
+  // Same-origin deploy override: if site ships static mc.html, prefer network origin
+  candidates.unshift(self.location.origin + "/mc-source.html");
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { mode: "cors", credentials: "omit", redirect: "follow" });
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength < 1000) continue; // not real game
+      const html = new Response(buf, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+      await cache.put(self.location.origin + "/mc.html", html.clone());
+      await cache.put("/mc.html", html.clone());
+      console.info("[n3xn sw] mc.html cached from", url.slice(0, 48), "…", buf.byteLength);
       return;
+    } catch (err) {
+      console.warn("[n3xn sw] mc try fail", String(err && err.message || err).slice(0, 80));
     }
-    const buf = await res.arrayBuffer();
-    const html = new Response(buf, {
-      status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=86400" },
-    });
-    await cache.put(self.location.origin + "/mc.html", html.clone());
-    await cache.put("/mc.html", html);
-  } catch (err) {
-    console.warn("[n3xn sw] mc.html", err);
   }
+
+  // Placeholder so /mc.html is not a hard 503 — guides user to terminal download
+  const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft offline</title>
+<style>body{font-family:system-ui;background:#0a0a0f;color:#e2e8f0;padding:2rem;line-height:1.5}
+code{background:#1e293b;padding:2px 6px;border-radius:4px}</style></head>
+<body>
+<h1>Minecraft not cached yet</h1>
+<p>GitHub release downloads are often blocked in the browser (CORS).</p>
+<p>In n3xn terminal run:</p>
+<pre><code>minecraft get 1.8-better
+minecraft open 1.8-better</code></pre>
+<p>Or place the HTML on your site as <code>/mc-source.html</code> and re-register the service worker.</p>
+</body></html>`;
+  const html = new Response(tip, {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+  await cache.put(self.location.origin + "/mc.html", html.clone());
+  await cache.put("/mc.html", html);
 }
 
 async function warmN3xnChat() {
   const cache = await caches.open(SHELL);
   try {
-    const res = await fetch(N3XN_CHAT_SRC, { mode: "cors" });
+    const res = await fetch(N3XN_CHAT_SRC || VORTEX_GITHUB_URL, { mode: "cors" });
     if (!res.ok) return;
     const buf = await res.arrayBuffer();
     const html = new Response(buf, {
@@ -256,9 +297,23 @@ async function warmN3xnChat() {
     await cache.put(self.location.origin + "/n3xn-chat.html", html.clone());
     await cache.put("/n3xn-chat.html", html.clone());
     await cache.put(self.location.origin + "/V0RT3X_chat.html", html.clone());
-    await cache.put("/V0RT3X_chat.html", html.clone());
   } catch (err) {
     console.warn("[n3xn sw] n3xn-chat", err);
+  }
+}
+
+async function warmVortexChat() {
+  const cache = await caches.open(SHELL);
+  try {
+    const res = await fetch(VORTEX_GITHUB_URL, { mode: "cors" });
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    await cache.put(
+      self.location.origin + "/V0RT3X_chat.html",
+      new Response(buf, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } })
+    );
+  } catch (err) {
+    console.error("[n3xn sw] V0RT3X", err);
   }
 }
 
@@ -563,7 +618,7 @@ self.addEventListener("message", (event) => {
     offlinePyodide = offlineReact = offlineCdn = true;
     event.waitUntil(
       saveFlags().then(() =>
-        Promise.all([warmMonaco(), warmPyodide(), warmExternal(), warmN3xnChat(), warmMinecraftOffline()])
+        Promise.all([warmMonaco(), warmPyodide(), warmExternal(), warmVortexChat(), warmN3xnChat(), warmMinecraftOffline()])
       )
     );
   }
