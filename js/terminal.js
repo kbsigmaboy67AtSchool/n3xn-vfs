@@ -30,6 +30,13 @@ async function loadStorage() {
   return import("./storage-backends.js");
 }
 
+function maybeNewsTip() {
+  try {
+    if (Math.random() > 0.3) return;
+    print('you should try this! run "minecraft" to open chromebook Minecraft!! also try "n3xn-chat" to open n3xn chat app!!', "ok");
+  } catch (_) {}
+}
+
 export function initTerminal() {
   loadAliases().catch(() => {});
 
@@ -37,6 +44,7 @@ export function initTerminal() {
   input.addEventListener("keydown", onKey);
   print("n3xn Virtual FileSystem v2 — Terminal", "ok");
   print("help · python · wss · logs on|off|copy|clear", "out");
+  maybeNewsTip();
   loadCollab()
     .then((collab) => collab.setLogger((msg, cls) => print(msg, cls || "out")))
     .catch((e) => print("collab module unavailable: " + e.message, "err"));
@@ -380,6 +388,17 @@ async function run(line) {
       case "devtools":
       case "dt":
         await cmdDevtools(args);
+        break;
+      case "sw":
+        await cmdSwOffline(args);
+        break;
+      case "minecraft":
+      case "mc":
+        await cmdMinecraft(args);
+        break;
+      case "n3xn-chat":
+      case "n3xnchat":
+        await cmdN3xnChat(args);
         break;
       default:
         print(`Command not found: ${cmd}. Type "help".`, "err");
@@ -2130,6 +2149,7 @@ async function cmdXdebug(args) {
   xdebug last                      last error/warn overlays
   xdebug open | copy | fix         last finding actions
   xdebug tryfix [file]             apply safe syntax fixes (=== , braces, JSON commas)
+  xdebug rules export|import|show|reset   shareable fix packs
   xdebug live <file>               force live probe
 
 Rules include: eqeqeq, no-eval, empty-catch, unused-var, react-key,
@@ -2169,21 +2189,74 @@ Rules include: eqeqeq, no-eval, empty-catch, unused-var, react-key,
     print("Fix prompt copied", "ok");
     return;
   }
+  if (sub === "rules") {
+    const a = (args[1] || "show").toLowerCase();
+    if (a === "export") {
+      const { pack, url, filename } = xd.exportRulesPack();
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      print("Exported " + filename + " · fixes=" + (pack.fixes || []).length, "ok");
+      return;
+    }
+    if (a === "import") {
+      const pasted = args.slice(2).join(" ");
+      if (pasted.trim().startsWith("{")) {
+        const pack = await xd.importRulesPack(pasted);
+        print("Imported " + (pack.name || "pack") + " · fixes=" + (pack.fixes || []).length, "ok");
+        return;
+      }
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = ".json,application/json,.n3xn-xdebug.json";
+      input.onchange = async () => {
+        try {
+          const text = await input.files[0].text();
+          const pack = await xd.importRulesPack(text);
+          print("Imported " + (pack.name || "pack") + " · fixes=" + (pack.fixes || []).length, "ok");
+        } catch (e) {
+          print(String(e.message || e), "err");
+        }
+      };
+      input.click();
+      print("Pick a rules JSON file…", "out");
+      return;
+    }
+    if (a === "reset") {
+      xd.resetRulesPack();
+      print("Rules reset to default", "ok");
+      return;
+    }
+    const pack = xd.loadRulesPack();
+    print(JSON.stringify({ name: pack.name, version: pack.version, fixes: pack.fixes }, null, 2));
+    return;
+  }
+
   if (sub === "tryfix") {
     const path = resolve(args[1] || window.__n3xnActivePath);
     if (!path) throw new Error("Usage: xdebug tryfix <file>");
     const f = await fs.readFile(path);
     if (!f) throw new Error("Not found");
-    // ensure findings exist
-    await xd.xdebugPath(path, { live: false });
-    const result = await xd.tryFix(path, f.text(), null);
+    let text = "";
+    if (typeof f === "string") text = f;
+    else if (typeof f.text === "function") text = f.text();
+    else if (f.content instanceof Uint8Array) text = new TextDecoder().decode(f.content);
+    else if (typeof f.content === "string") text = f.content;
+    else text = String(f);
+
+    const report = await xd.xdebugPath(path, { live: false });
+    const findings = report?.findings || report?.errors || xd.getLastFindings?.() || [];
+    const result = await xd.tryFix(path, text, findings);
     if (!result.changed) {
       print("No safe automatic fixes applied", "out");
-      result.applied.forEach((a) => print("  · " + a));
+      (result.applied || []).forEach((a) => print("  · " + a));
       return;
     }
     print("Applied:", "ok");
-    result.applied.forEach((a) => print("  ✓ " + a, "ok"));
+    (result.applied || []).forEach((a) => print("  ✓ " + a, "ok"));
     if (!confirm("Write fixed content to " + path + "?")) {
       print("Aborted (preview only). Re-run and confirm to save.", "err");
       print(result.text.slice(0, 2000));
@@ -2194,13 +2267,12 @@ Rules include: eqeqeq, no-eval, empty-catch, unused-var, react-key,
     if (window.__n3xnActivePath === path && window.__n3xnEditor) {
       try { window.__n3xnEditor.setValue(result.text); } catch {}
     }
-    // re-scan
     const again = await xd.xdebugPath(path, { live: false });
     xd.formatReport(again, path).forEach((l) => print(l));
     return;
   }
 
-  const pathArg = ["live", "tryfix", "last", "open", "copy", "fix", "help"].includes(sub)
+  const pathArg = ["live", "tryfix", "last", "open", "copy", "fix", "help", "rules"].includes(sub)
     ? args[1]
     : args[0];
   const path = resolve(pathArg || window.__n3xnActivePath);
@@ -2367,4 +2439,186 @@ async function cmdDevtools(args) {
   dt.mountHostDevtools();
   dt.openDevtools();
   print("n3xn DevTools open (F12)", "ok");
+}
+
+
+async function cmdSwOffline(args) {
+  const sub = (args[0] || "status").toLowerCase();
+  if (sub === "help") {
+    print("sw — service worker offline packs");
+    print("  sw status");
+    print("  Offline packs ON by default after SW install (Monaco, Pyodide, React, JSZip, Wasmoon…).");
+    print("  sw pyodide on|off");
+    print("  sw react on|off");
+    print("  sw cdn on|off         — jsdelivr/esm/cdnjs/fonts intercept");
+    print("  sw warm pyodide|react|cdn|all");
+    print("  Proxies: /__monaco__/ /__pyodide__/ /__cdn__/");
+    return;
+  }
+  if (!("serviceWorker" in navigator) || !navigator.serviceWorker.controller) {
+    print("No active service worker (register SW / reload first)", "err");
+    return;
+  }
+  const ctl = navigator.serviceWorker.controller;
+
+  function ask(type, extra = {}) {
+    return new Promise((resolve) => {
+      const onMsg = (e) => {
+        if (!e.data || (e.data.type !== "N3XN_SW_CONFIG_OK" && e.data.type !== "N3XN_SW_STATUS")) return;
+        navigator.serviceWorker.removeEventListener("message", onMsg);
+        resolve(e.data);
+      };
+      navigator.serviceWorker.addEventListener("message", onMsg);
+      ctl.postMessage({ type, ...extra });
+      setTimeout(() => {
+        navigator.serviceWorker.removeEventListener("message", onMsg);
+        resolve(null);
+      }, 8000);
+    });
+  }
+
+  if (sub === "status") {
+    const st = await ask("N3XN_SW_STATUS");
+    if (!st) print("SW did not respond (update sw.js and reload)", "err");
+    else print("pyodide offline: " + st.pyodide + " · react offline: " + st.react, "ok");
+    return;
+  }
+
+  if (sub === "pyodide" || sub === "react" || sub === "cdn") {
+    const on = ["on", "1", "true", "yes"].includes((args[1] || "").toLowerCase());
+    const off = ["off", "0", "false", "no"].includes((args[1] || "").toLowerCase());
+    if (!on && !off) {
+      print("Usage: sw " + sub + " on|off");
+      return;
+    }
+    const payload = { type: "N3XN_SW_CONFIG" };
+    payload[sub] = on;
+    print("Setting " + sub + " offline = " + on + (on ? " (warming cache…)" : ""), "out");
+    const st = await ask("N3XN_SW_CONFIG", payload);
+    if (st) print("ok — pyodide:" + st.pyodide + " react:" + st.react, "ok");
+    else print("Sent; if no reply, hard-reload after deploy", "out");
+    return;
+  }
+
+  if (sub === "warm") {
+    const what = (args[1] || "all").toLowerCase();
+    if (what === "pyodide" || what === "all") {
+      ctl.postMessage({ type: "WARM_PYODIDE" });
+      print("Warming Pyodide cache…", "out");
+    }
+    if (what === "react" || what === "cdn" || what === "all") {
+      ctl.postMessage({ type: what === "cdn" ? "WARM_CDN" : "WARM_REACT" });
+      print("Warming React/Babel/CDN cache…", "out");
+    }
+    if (what === "all") {
+      ctl.postMessage({ type: "WARM_ALL" });
+    }
+    return;
+  }
+
+  print('Unknown. Try "sw help"', "err");
+}
+
+
+async function cmdMinecraft(args) {
+  const mc = await import("./minecraft.js");
+  const sub = (args[0] || "help").toLowerCase();
+
+  if (sub === "help" || sub === "-h") {
+    print("minecraft | mc — Chromebook Minecraft helper");
+    print("  minecraft list              — list versions");
+    print("  minecraft get <id|#|name>   — download HTML to device (blob → Save As)");
+    print("  minecraft open <id|#>       — fetch & open in new tab");
+    print("  minecraft offline           — open built-in offline /mc.html (1.8 better)");
+    print("  minecraft skins             — list skin PNGs");
+    print("  minecraft skin <name>       — download a skin PNG");
+    print("  Tip: recommended id = 1.8-better");
+    return;
+  }
+
+  if (sub === "list" || sub === "ls") {
+    const rows = mc.listVersions();
+    for (const r of rows) {
+      print(
+        String(r.n).padStart(2) + ". " + r.id.padEnd(16) + " " + r.label +
+          "  (" + r.size + ")" + (r.recommend ? "  ★" : "")
+      );
+    }
+    print("Use: minecraft get 1.8-better   or   minecraft get 1");
+    return;
+  }
+
+  if (sub === "offline" || sub === "play") {
+    print("Opening offline Minecraft (/mc.html)…", "ok");
+    mc.openOfflineMc();
+    return;
+  }
+
+  if (sub === "open") {
+    const key = args.slice(1).join(" ") || "1.8-better";
+    print("Fetching " + key + "…", "out");
+    try {
+      const r = await mc.openMcInTab(key);
+      print("Opened " + r.filename, "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
+    return;
+  }
+
+  if (sub === "get" || sub === "download" || sub === "dl") {
+    const key = args.slice(1).join(" ") || "1.8-better";
+    print("Downloading " + key + " (large files may take a minute)…", "out");
+    try {
+      const r = await mc.fetchMcAsset("game", key, (m) => print(m, "out"));
+      mc.downloadBlob(r.blob, r.filename);
+      print("Saved download: " + r.filename + " (" + Math.round(r.size / 1048576) + " MB)", "ok");
+      print("Blob URL (session): " + r.blobUrl, "out");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
+    return;
+  }
+
+  if (sub === "skins") {
+    mc.listSkins().forEach((s, i) => print(String(i + 1).padStart(2) + ". " + s));
+    print("Use: minecraft skin <filename-fragment>");
+    return;
+  }
+
+  if (sub === "skin") {
+    const key = args.slice(1).join(" ");
+    if (!key) {
+      print("Usage: minecraft skin <name>");
+      return;
+    }
+    try {
+      const r = await mc.fetchMcAsset("skin", key, (m) => print(m, "out"));
+      mc.downloadBlob(r.blob, r.filename);
+      print("Downloaded skin: " + r.filename, "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
+    return;
+  }
+
+  // bare: minecraft 1.8-better
+  if (sub && sub !== "help") {
+    print("Downloading " + sub + "…", "out");
+    try {
+      const r = await mc.fetchMcAsset("game", args.join(" ") || sub, (m) => print(m, "out"));
+      mc.downloadBlob(r.blob, r.filename);
+      print("Saved: " + r.filename, "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+      print('Try: minecraft list', "out");
+    }
+    return;
+  }
+}
+
+async function cmdN3xnChat() {
+  print("Opening n3xn chat (/n3xn-chat.html)…", "ok");
+  const mc = await import("./minecraft.js");
+  mc.openN3xnChat();
 }
