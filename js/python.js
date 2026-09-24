@@ -80,25 +80,44 @@ export function hideGameCanvas() {
   if (host) host.style.display = "none";
 }
 
+/** Prefer same-origin SW proxy when service worker controls the page */
+function pyodideIndexURL() {
+  try {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      return new URL("/__pyodide__/v0.26.2/full/", location.origin).href;
+    }
+  } catch (_) {}
+  return "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/";
+}
+
 export async function ensurePyodide() {
   if (pyodide) return pyodide;
   if (loading) return loading;
 
   loading = (async () => {
-    log("Loading Pyodide WASM…", "ok");
+    const base = pyodideIndexURL();
+    log("Loading Pyodide WASM… (" + base + ")", "ok");
     if (!window.loadPyodide) {
       await new Promise((resolve, reject) => {
         const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js";
+        s.src = base + "pyodide.js";
         s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load pyodide.js CDN"));
+        s.onerror = () => {
+          // fallback CDN
+          if (!s.dataset.fallback) {
+            s.dataset.fallback = "1";
+            s.src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js";
+            return;
+          }
+          reject(new Error("Failed to load pyodide.js"));
+        };
         document.head.appendChild(s);
       });
     }
 
     pyodide = await withAmdGuard(async () =>
       loadPyodide({
-        indexURL: "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/",
+        indexURL: base.startsWith("http") ? base : base,
         stdout: (t) => log(t, "out"),
         stderr: (t) => log(t, "err"),
       })
