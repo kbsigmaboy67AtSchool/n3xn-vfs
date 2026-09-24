@@ -731,54 +731,217 @@ var c=console;
 /* ========== tryfix (deterministic, non-AI) ========== */
 
 export async function tryFix(path, text, findings) {
-  let out = text;
   const applied = [];
-  const list = findings || getLastFindings().filter((f) => f.path === path || f.path?.startsWith(path));
+  let out = String(text ?? "");
+  const findingsList = Array.isArray(findings) ? findings : [];
 
-  for (const f of list) {
-    if (!f.fixable && f.fixKind !== "balance" && f.fixKind !== "json") continue;
-
-    if (f.fixKind === "balance" && f.fixData) {
-      const { close, delta } = f.fixData;
-      if (delta > 0 && delta < 20) {
-        out = out + "\n" + close.repeat(delta);
-        applied.push(`Appended ${delta} closing '${close}'`);
-      }
-    }
-    if (f.fixKind === "json" || f.rule === "json-parse") {
-      // trailing comma fix
-      const fixed = out.replace(/,\s*([}\]])/g, "$1");
-      if (fixed !== out) {
+  // Custom user rules first (importable packs)
+  try {
+    const pack = loadRulesPack();
+    if (pack && Array.isArray(pack.fixes)) {
+      for (const rule of pack.fixes) {
         try {
-          JSON.parse(fixed);
-          out = fixed;
-          applied.push("Removed trailing commas");
-        } catch (_) {}
-      }
-    }
-    if (f.rule === "eqeqeq" && f.line) {
-      const lines = linesOf(out);
-      const i = f.line - 1;
-      if (lines[i]) {
-        const nl = lines[i].replace(/([^=!])==([^=])/g, "$1===$2").replace(/!=([^=])/g, "!==$1");
-        if (nl !== lines[i]) {
-          lines[i] = nl;
-          out = lines.join("\n");
-          applied.push(`Line ${f.line}: == → ===`);
+          if (rule.type === "replace" && rule.search != null) {
+            const flags = rule.flags || "g";
+            const re = new RegExp(rule.search, flags);
+            const next = out.replace(re, rule.replace ?? "");
+            if (next !== out) {
+              out = next;
+              applied.push("rule:" + (rule.id || rule.search));
+            }
+          } else if (rule.type === "append" && rule.text) {
+            out = out + rule.text;
+            applied.push("rule:append:" + (rule.id || ""));
+          }
+        } catch (e) {
+          applied.push("rule-error:" + (e.message || e));
         }
       }
     }
+  } catch (_) {}
+
+  // JSON: trailing commas, single quotes on keys/strings (conservative)
+  if (/\.json$/i.test(path) || findingsList.some((f) => f.fixKind === "json" || f.rule === "json-parse")) {
+    let j = out;
+    j = j.replace(/,\s*([}\]])/g, "$1");
+    j = j.replace(/'/g, '"'); // risky but common student JSON
+    try {
+      JSON.parse(j);
+      if (j !== out) {
+        out = j;
+        applied.push("json: trailing commas / quotes");
+      }
+    } catch (_) {
+      // try only trailing commas
+      const j2 = out.replace(/,\s*([}\]])/g, "$1");
+      try {
+        JSON.parse(j2);
+        if (j2 !== out) {
+          out = j2;
+          applied.push("json: trailing commas");
+        }
+      } catch (__) {}
+    }
   }
 
-  // Generic: unmatched braces at EOF
-  const o = (out.match(/\{/g) || []).length;
-  const c = (out.match(/\}/g) || []).length;
-  if (o > c && o - c < 15) {
-    out = out + "\n" + "}".repeat(o - c);
-    applied.push(`EOF: added ${o - c} '}'`);
+  // JS/TS: common syntax repairs
+  if (/\.(js|jsx|ts|tsx|mjs|cjs)$/i.test(path) || findingsList.some((f) => (f.rule || "").startsWith("js") || f.fixKind === "js")) {
+    // Remove BOM
+    if (out.charCodeAt(0) === 0xfeff) {
+      out = out.slice(1);
+      applied.push("js: strip BOM");
+    }
+    // Smart quotes → ASCII
+    const q = out.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+    if (q !== out) {
+      out = q;
+      applied.push("js: smart quotes");
+    }
+    // == to === on flagged lines
+    for (const f of findingsList) {
+      if ((f.rule === "eqeqeq" || /Expected '==='/.test(f.message || "")) && f.line) {
+        const lines = out.split("\n");
+        const i = f.line - 1;
+        if (lines[i]) {
+          const nl = lines[i]
+            .replace(/([^=!<>])={2}([^=])/g, "$1===$2")
+            .replace(/!={1}([^=])/g, "!==$1");
+          if (nl !== lines[i]) {
+            lines[i] = nl;
+            out = lines.join("\n");
+            applied.push(`Line ${f.line}: == → ===`);
+          }
+        }
+      }
+    }
+    // Missing semicolons after simple return/const at EOL (very conservative)
+    // Unmatched braces / parens / brackets at EOF
+    const pairs = [
+      ["{", "}", "brace"],
+      ["(", ")", "paren"],
+      ["[", "]", "bracket"],
+    ];
+    for (const [a, b, label] of pairs) {
+      const open = (out.match(new RegExp("\\" + a, "g")) || []).length;
+      const close = (out.match(new RegExp("\\" + b, "g")) || []).length;
+      const d = open - close;
+      if (d > 0 && d < 20) {
+        out = out + "\n" + b.repeat(d);
+        applied.push(`EOF: added ${d} '${b}' (${label})`);
+      }
+    }
+    // Unclosed template / string at last line — add closer if odd count of `
+    const ticks = (out.match(/`/g) || []).length;
+    if (ticks % 2 === 1) {
+      out += "`";
+      applied.push("EOF: closed template literal");
+    }
   }
 
-  return { text: out, applied, changed: out !== text };
+  // HTML: unclosed void-ish tags, basic
+  if (/\.(html?|n3-site)$/i.test(path)) {
+    const openTags = out.match(/<([a-zA-Z][\w-]*)(?:\s[^>]*)?>/g) || [];
+    const voidish = new Set(["img","br","hr","input","meta","link","source","area","base","col","embed","wbr"]);
+    // do not auto-close aggressively
+  }
+
+  // Python: tabs→spaces, missing colon on def/if/for (line-level)
+  if (/\.py$/i.test(path) || findingsList.some((f) => f.rule && f.rule.startsWith("py"))) {
+    if (/\t/.test(out)) {
+      out = out.replace(/\t/g, "    ");
+      applied.push("py: tabs → 4 spaces");
+    }
+    const lines = out.split("\n");
+    let changed = false;
+    for (let i = 0; i < lines.length; i++) {
+      const L = lines[i];
+      if (/^\s*(def|class|if|elif|else|for|while|try|except|finally|with)\b/.test(L) && !L.rstrip().endswith(":") && !L.strip().startswith("#")) {
+        // only if no comment-only and looks like header
+        if (!L.includes(":") && !L.trim().startswith("@")) {
+          lines[i] = L.rstrip() + ":";
+          applied.push(`Line ${i + 1}: added ':'`);
+          changed = true;
+        }
+      }
+    }
+    if (changed) out = lines.join("\n");
+  }
+
+  // Re-run built-in trailing comma pass for any remaining findings
+  for (const f of findingsList) {
+    if (f.fixKind === "json" || f.rule === "json-parse") {
+      const fixed = out.replace(/,\s*([}\]])/g, "$1");
+      try {
+        JSON.parse(fixed);
+        if (fixed !== out) {
+          out = fixed;
+          if (!applied.some((a) => a.includes("trailing"))) applied.push("json: trailing commas");
+        }
+      } catch (_) {}
+    }
+  }
+
+  return { text: out, applied, changed: out !== String(text ?? "") };
+}
+
+/* ========== Importable rules packs (shareable xdebugger logic) ========== */
+
+const RULES_KEY = "n3xn_xdebug_rules_pack";
+
+export function loadRulesPack() {
+  try {
+    const raw = localStorage.getItem(RULES_KEY);
+    if (!raw) return defaultRulesPack();
+    return JSON.parse(raw);
+  } catch {
+    return defaultRulesPack();
+  }
+}
+
+export function saveRulesPack(pack) {
+  const p = pack || defaultRulesPack();
+  p.version = p.version || 1;
+  p.updated = Date.now();
+  localStorage.setItem(RULES_KEY, JSON.stringify(p));
+  return p;
+}
+
+export function defaultRulesPack() {
+  return {
+    version: 1,
+    name: "n3xn-default",
+    description: "Built-in deterministic xdebug tryfix rules",
+    checks: [],
+    fixes: [
+      {
+        id: "strip-bom",
+        type: "replace",
+        search: "^\\uFEFF",
+        flags: "",
+        replace: "",
+      },
+    ],
+  };
+}
+
+export function exportRulesPack() {
+  const pack = loadRulesPack();
+  const blob = new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  return { pack, url, filename: (pack.name || "xdebug-rules") + ".n3xn-xdebug.json" };
+}
+
+export async function importRulesPack(jsonOrText) {
+  let pack = typeof jsonOrText === "string" ? JSON.parse(jsonOrText) : jsonOrText;
+  if (!pack || typeof pack !== "object") throw new Error("Invalid rules pack");
+  if (!Array.isArray(pack.fixes)) pack.fixes = [];
+  saveRulesPack(pack);
+  return pack;
+}
+
+export function resetRulesPack() {
+  localStorage.removeItem(RULES_KEY);
+  return defaultRulesPack();
 }
 
 /* ========== Public API ========== */
