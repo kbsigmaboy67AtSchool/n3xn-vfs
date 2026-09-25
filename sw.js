@@ -2,7 +2,7 @@
 const SHELL = "n3xn-shell-v11";
 const MONACO = "n3xn-monaco-v4";
 const PYODIDE_CACHE = "n3xn-pyodide-v1";
-const CDN_CACHE = "n3xn-cdn-v1";
+const CDN_CACHE = "n3xn-cdn-v2";
 const PREFIX = "/__monaco__/";
 const PY_PREFIX = "/__pyodide__/";
 const CDN_PREFIX = "/__cdn__/";
@@ -111,6 +111,17 @@ const EXTERNAL_CORE = [
   "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/git@main/public/devtools.js",
   "https://fonts.googleapis.com/css2?family=Sixtyfour&family=JetBrains+Mono:wght@400;500;700&family=Share+Tech+Mono&display=swap",
   "https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.52.2/min/vs/loader.min.js",
+  /* game / teaching packs — offline via /__cdn__/ */
+  "https://cdn.jsdelivr.net/npm/kaboom@3000.1.17/dist/kaboom.js",
+  "https://esm.sh/kaboom@3000.1.17",
+  "https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js",
+  "https://cdn.jsdelivr.net/npm/pixi.js@8.6.6/dist/pixi.min.js",
+  "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.min.js",
+  "https://cdn.jsdelivr.net/npm/matter-js@0.20.0/build/matter.min.js",
+  "https://cdn.jsdelivr.net/npm/p5@1.11.1/lib/p5.min.js",
+  "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.js",
+  "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.wasm",
+  "https://cdn.jsdelivr.net/npm/biwascheme@0.8.0/release/biwascheme-min.js",
 ];
 
 self.addEventListener("install", (event) => {
@@ -261,16 +272,64 @@ async function warmMinecraftOffline() {
     }
   }
 
-  const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft offline</title>
-<style>body{font-family:system-ui;background:#0a0a0f;color:#e2e8f0;padding:2rem;line-height:1.5}
-code{background:#1e293b;padding:2px 6px;border-radius:4px}</style></head>
-<body>
+  const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;
+background:#0a0a0f;color:#e2e8f0;padding:1.5rem;line-height:1.5}
+.box{max-width:420px;border:1px solid #334155;border-radius:12px;padding:1.5rem;background:#0d1117}
+h1{margin:0 0 .5rem;font-size:1.25rem;color:#00f3ff}
+p{margin:.5rem 0;color:#94a3b8;font-size:.9rem}
+code{background:#1e293b;padding:2px 6px;border-radius:4px;font-size:.8rem}
+button,label.btn{display:inline-block;margin-top:.75rem;padding:.65rem 1rem;border:0;border-radius:8px;
+background:#00f3ff;color:#000;font-weight:700;cursor:pointer;font-size:.9rem}
+button.secondary{background:#1e293b;color:#e2e8f0;margin-left:.5rem}
+#status{margin-top:1rem;font-size:.85rem;color:#a5f3fc;white-space:pre-wrap}
+</style></head><body><div class="box">
 <h1>Minecraft not cached yet</h1>
-<p>Run in n3xn terminal:</p>
-<pre><code>minecraft get 1.8-better
-minecraft offline</code></pre>
-<p>Ensure CF <code>_redirects</code> proxies <code>/github-assets/:tag/:file</code>.</p>
-</body></html>`;
+<p>Browsers cannot auto-fetch the release (CORS). Do this once:</p>
+<p><strong>1.</strong> Download the HTML (Chrome / Files app).<br>
+<strong>2.</strong> Import it below — seeds <code>/mc.html</code> on this device.</p>
+<label class="btn"><input type="file" id="f" accept=".html,text/html" hidden>Import Minecraft .html</label>
+<button type="button" class="secondary" id="reload">Retry open</button>
+<p style="margin-top:1rem">Or in n3xn terminal: <code>minecraft get 1.8-better</code> then <code>minecraft import</code></p>
+<div id="status"></div>
+<script>
+const status = document.getElementById("status");
+function log(m){ status.textContent = m; }
+document.getElementById("f").onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  log("Reading " + file.name + "…");
+  try {
+    const buf = await file.arrayBuffer();
+    if (buf.byteLength < 500000) throw new Error("File too small (" + buf.byteLength + " bytes) — pick the full game HTML");
+    const names = ["n3xn-shell-v11","n3xn-shell-v10","n3xn-shell-v9","n3xn-shell-v8"];
+    for (const name of names) {
+      try {
+        const cache = await caches.open(name);
+        const res = new Response(buf.slice(0), {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "X-N3xn-Mc": "1",
+            "Cache-Control": "public, max-age=31536000"
+          }
+        });
+        await cache.put(location.origin + "/mc.html", res.clone());
+        await cache.put("/mc.html", res.clone());
+      } catch (err) { console.warn(err); }
+    }
+    log("Cached " + Math.round(buf.byteLength/1048576) + " MB. Reloading…");
+    location.reload();
+  } catch (err) {
+    log(String(err.message || err));
+  }
+};
+document.getElementById("reload").onclick = () => location.reload();
+</script>
+</div></body></html>`;
+
   const html = new Response(tip, {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "X-N3xn-Mc": "0" },
