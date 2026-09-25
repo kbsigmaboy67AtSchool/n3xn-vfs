@@ -1214,3 +1214,44 @@ window.__n3xnRunXdebug = async (path) => {
 };
 
 try { vfsPicker.installApi?.(); } catch (_e) {}
+
+
+/* Terminal vertical resize — workspace flexes to fit */
+(function initTermResize() {
+  const panel = document.getElementById("terminal-panel");
+  if (!panel || panel.querySelector(".terminal-resize-handle")) return;
+  const handle = document.createElement("div");
+  handle.className = "terminal-resize-handle";
+  handle.title = "Drag to resize terminal";
+  panel.prepend(handle);
+  let startY = 0, startH = 0;
+  const onMove = (e) => {
+    const y = e.touches ? e.touches[0].clientY : e.clientY;
+    const dy = startY - y;
+    const h = Math.min(window.innerHeight * 0.7, Math.max(32, startH + dy));
+    document.documentElement.style.setProperty("--n3xn-term-h", h + "px");
+    panel.style.height = h + "px";
+    panel.classList.toggle("collapsed", h <= 36);
+    try { window.__n3xnEditor?.layout?.(); } catch (_) {}
+  };
+  const onUp = () => {
+    handle.classList.remove("dragging");
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    window.removeEventListener("touchmove", onMove);
+    window.removeEventListener("touchend", onUp);
+  };
+  const onDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.classList.add("dragging");
+    startY = e.touches ? e.touches[0].clientY : e.clientY;
+    startH = panel.getBoundingClientRect().height;
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+  };
+  handle.addEventListener("mousedown", onDown);
+  handle.addEventListener("touchstart", onDown, { passive: false });
+})();
