@@ -165,6 +165,8 @@ export function detectRunner(path) {
   if (e === "sql") return "sql";
   if (e === "scm" || e === "ss") return "scheme";
   if (e === "bf" || e === "b") return "bf";
+  if (e === "kaboom" || (path || "").toLowerCase().includes("kaboom")) return "kaboom";
+  if ((path || "").toLowerCase().includes("phaser")) return "phaser";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -255,6 +257,19 @@ function iframeHtml(src) {
 
 /* ========== 1. HTML → new window (raw blob, correct type) ========== */
 export async function runHtmlWindow(path) {
+  try {
+    const gr = await import("./game-runner.js");
+    const f = await fs.readFile(path);
+    if (f) {
+      const rewritten = gr.rewriteCdnImports(f.text());
+      if (rewritten !== f.text()) {
+        const { url } = createBlobFromText(rewritten, "text/html", "html-offline:" + path);
+        window.open(url, "_blank", "noopener");
+        termPrint(`Opened HTML window (CDN→offline rewrite): ${path}`, "ok");
+        return url;
+      }
+    }
+  } catch (_) {}
   const { url } = await createBlobFromPath(path, "text/html");
   const w = window.open(url, "_blank");
   if (!w) throw new Error("Popup blocked — allow popups for this site");
@@ -554,6 +569,18 @@ export async function run(path, mode) {
     case "bf":
     case "brainfuck":
       return runLangFile(path, m === "brainfuck" ? "bf" : m);
+    case "kaboom":
+    case "phaser":
+    case "pixi":
+    case "three":
+    case "matter":
+    case "p5":
+    case "game":
+      return (async () => {
+        const gr = await import("./game-runner.js");
+        if (m === "game") return gr.runGameAuto(path);
+        return gr.runGamePack(path, m);
+      })();
     case "nexc":
       return (async () => {
         const { print } = await import("./terminal.js").catch(() => ({ print: console.log }));
