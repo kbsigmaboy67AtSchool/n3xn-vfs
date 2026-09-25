@@ -241,6 +241,13 @@ async function run(line) {
       case "open":
         await cmdRun(args);
         break;
+      case "ecalc":
+      case "nmath":
+        await cmdEcalc(args);
+        break;
+      case "canvas":
+        await cmdCanvas(args);
+        break;
       case "blobs":
       case "blob":
         await cmdBlobs(args);
@@ -711,7 +718,7 @@ async function cmdRun(args) {
   // run <file>
   const modes = [
     "html", "html-window", "js", "python", "py", "lua", "c", "cpp", "rust", "go",
-    "sql", "scheme", "bf", "brainfuck", "kaboom", "phaser", "pixi", "three", "matter", "p5", "game",
+    "sql", "scheme", "bf", "brainfuck", "nmath", "ecalc", "kaboom", "phaser", "pixi", "three", "matter", "p5", "game",
     "image", "markdown", "md", "json", "css",
     "text", "dataurl", "blob-open", "react", "n3-site", "auto",
   ];
@@ -758,17 +765,39 @@ async function cmdRun(args) {
     if (mode === "py") mode = "python";
   }
 
+  // -c-  in-window / no temp file
+  if (rest[0] === "-c-" || rest[0] === "--code-inline") {
+    const codeRaw = rest.slice(1).join(" ");
+    if (!codeRaw) throw new Error("Usage: run [type] -c- <code|url>");
+    const code = await resolveCodeArg(codeRaw);
+    const type = mode || "js";
+    print(`Running -c- as ${type} (in-place, ${code.length} chars)…`);
+    await runner.runCodeInPlace(type, code, { log: (m, c) => print(m, c || "ok") });
+    print("Done", "ok");
+    return;
+  }
+
   if (rest[0] === "-c" || rest[0] === "--code") {
     const codeRaw = rest.slice(1).join(" ");
     if (!codeRaw) throw new Error("Usage: run [type] -c <code|url>");
     const code = await resolveCodeArg(codeRaw);
     const type = mode || "js";
     print(`Running -c as ${type} (${code.length} chars)…`);
-    // write temp and run
-    const tmp = `/tmp/run-${type}-${Date.now()}.${type === "python" ? "py" : type === "lua" ? "lua" : type === "sql" ? "sql" : type === "scheme" ? "scm" : type === "bf" ? "bf" : type === "c" ? "c" : type === "cpp" ? "cpp" : type === "rust" ? "rs" : type === "go" ? "go" : "js"}`;
+    const ext =
+      type === "python" || type === "py" ? "py" :
+      type === "lua" ? "lua" :
+      type === "sql" ? "sql" :
+      type === "scheme" ? "scm" :
+      type === "bf" || type === "brainfuck" ? "bf" :
+      type === "nmath" || type === "ecalc" ? "nmath" :
+      type === "c" ? "c" :
+      type === "cpp" ? "cpp" :
+      type === "rust" ? "rs" :
+      type === "go" ? "go" : "js";
+    const tmp = `/tmp/run-${type}-${Date.now()}.${ext}`;
     await fs.mkdir("/tmp", { parents: true }).catch(() => {});
     await fs.writeFile(tmp, code);
-    await runner.run(tmp, type);
+    await runner.run(tmp, type === "ecalc" ? "nmath" : type);
     print("Done", "ok");
     return;
   }
@@ -2878,4 +2907,92 @@ async function cmdPresence(args) {
     return;
   }
   print("presence show|name <str>|color <#hex>|sel <#hex>|label <bg> [fg]");
+}
+
+
+async function cmdEcalc(args) {
+  const nm = await import("./nmath.js");
+  if (!args.length || args[0] === "help") {
+    print(nm.nmathHelp());
+    print("ecalc <file.nmath> | ecalc -c <english math> | ecalc -c- <…>");
+    return;
+  }
+  if (args[0] === "-c-" || args[0] === "-c") {
+    const inline = args[0] === "-c-";
+    const code = args.slice(1).join(" ");
+    if (!code) throw new Error("Usage: ecalc -c <math>");
+    // support URL same as run
+    let src = code;
+    if (/^(https?|data|blob):/i.test(code) || (/^[\w.-]+\.[a-z]{2,}/i.test(code) && code.includes("/"))) {
+      let url = code;
+      if (!/^(https?|data|blob):/i.test(url)) url = "https://" + url.replace(/^\/+/, "");
+      const res = await fetch(url);
+      src = await res.text();
+    }
+    const r = nm.runNmath(src, { log: (m, c) => print(m, c || "ok") });
+    if (r.last !== undefined) print("→ " + r.last, "ok");
+    return;
+  }
+  const path = resolve(args[0]);
+  const r = await nm.runNmathFile(path, { log: (m, c) => print(m, c || "ok") });
+  if (r.last !== undefined) print("→ " + r.last, "ok");
+}
+
+
+async function cmdCanvas(args) {
+  // canvas python|kaboom|p5|phaser [file]  — full window game canvas
+  // //!n3xn canvas=python width=800 height=600
+  const kind = (args[0] || "python").toLowerCase();
+  const file = args[1] ? resolve(args[1]) : window.__n3xnActivePath;
+  let w = 800, h = 600, title = "n3xn canvas";
+  let code = "";
+  if (file) {
+    try {
+      const f = await fs.readFile(file);
+      code = f.text();
+      const cfg = code.match(/\/\/!\s*n3xn[^\n]*/i);
+      if (cfg) {
+        const m = cfg[0];
+        const ww = m.match(/width\s*=\s*(\d+)/i);
+        const hh = m.match(/height\s*=\s*(\d+)/i);
+        const tt2 = m.match(/title\s*=\s*"([^"]+)"/);
+        if (ww) w = +ww[1];
+        if (hh) h = +hh[1];
+        if (tt2) title = tt2[1];
+      }
+    } catch (_) {}
+  }
+  if (kind === "python" || kind === "py") {
+    const { runPythonCanvas } = await import("./python.js").catch(() => ({}));
+    if (typeof runPythonCanvas === "function") {
+      await runPythonCanvas(file, { width: w, height: h, title });
+      print("Python canvas window opened", "ok");
+      return;
+    }
+    // fallback HTML shell with pyodide + canvas
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"/><title>${title}</title>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"><\/script></head>
+<body style="margin:0;background:#0a0a0f">
+<canvas id="c" width="${w}" height="${h}" style="display:block;margin:0 auto;background:#111"></canvas>
+<script>
+const code = ${JSON.stringify(code)};
+(async () => {
+  const pyodide = await loadPyodide();
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d");
+  pyodide.globals.set("canvas", canvas);
+  pyodide.globals.set("ctx", ctx);
+  await pyodide.runPythonAsync(code);
+})();
+<\/script></body></html>`;
+    const blob = new Blob([html], { type: "text/html" });
+    window.open(URL.createObjectURL(blob), "_blank");
+    print("Python canvas (fallback) opened", "ok");
+    return;
+  }
+  // game packs in dedicated window size
+  const gr = await import("./game-runner.js");
+  if (!file) throw new Error("Usage: canvas kaboom|p5|phaser|python <file>");
+  await gr.runGamePack(file, kind === "game" ? "kaboom" : kind);
+  print(kind + " canvas window opened", "ok");
 }
