@@ -69,7 +69,12 @@ export async function collectProject(entryPath, cfg = {}) {
   async function add(path) {
     const p = normalize(path.startsWith("/") ? path : dir + "/" + path);
     if (files.has(p)) return;
-    const f = await fs.readFile(p);
+    let f;
+    try {
+      f = await fs.readFile(p);
+    } catch {
+      return; // missing optional project file — skip
+    }
     if (!f) return;
     let text = "";
     try {
@@ -100,10 +105,21 @@ export async function collectProject(entryPath, cfg = {}) {
     }
   } catch (_) {}
 
-  // n3xn.json / n3proj.json
-  for (const name of ["n3xn.json", "n3proj.json", "project.n3xn.json"]) {
+  // Optional project meta: only n3xn.json in the same folder is required (if present).
+  // Aliases are fallbacks — first one found wins. Missing file is fine (run single entry).
+  async function tryRead(path) {
+    try {
+      if (typeof fs.exists === "function" && !fs.exists(path)) return null;
+      return await fs.readFile(path);
+    } catch {
+      return null;
+    }
+  }
+
+  const metaNames = ["n3xn.json", "n3proj.json", "project.n3xn.json"];
+  for (const name of metaNames) {
     const metaPath = normalize(dir + "/" + name);
-    const mf = await fs.readFile(metaPath);
+    const mf = await tryRead(metaPath);
     if (!mf) continue;
     try {
       const meta = JSON.parse(mf.text());
@@ -111,8 +127,18 @@ export async function collectProject(entryPath, cfg = {}) {
         for (const rel of meta.files) await add(rel);
       }
       if (meta.entry) await add(meta.entry);
-      Object.assign(cfg, parseN3xnConfig(""), meta);
-    } catch (_) {}
+      // merge plain JSON keys into cfg (don't require //!n3xn lines)
+      if (meta && typeof meta === "object") {
+        for (const [k, v] of Object.entries(meta)) {
+          if (k === "files" || k === "entry") continue;
+          if (v != null) cfg[k] = v;
+        }
+      }
+      Object.assign(cfg, parseN3xnConfig("", cfg));
+    } catch (_) {
+      /* invalid JSON — ignore meta, still run entry */
+    }
+    break; // only one meta file needed
   }
 
   return { entry, dir, lang, files, cfg };
@@ -211,7 +237,12 @@ export async function runCompiledProject(entryPath, lang, opts = {}) {
 
   // If a .wasm sibling exists, run it as WASI-less instantiate (limited)
   const wasmPath = project.entry.replace(/\.\w+$/, ".wasm");
-  const wasmFile = await fs.readFile(wasmPath);
+  let wasmFile = null;
+  try {
+    wasmFile = await fs.readFile(wasmPath);
+  } catch {
+    wasmFile = null;
+  }
   if (wasmFile) {
     log("Found " + wasmPath + " — instantiating WASM…", "ok");
     try {
