@@ -401,6 +401,12 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Internal JS-only proxy — network only, never SPA
+  if (url.origin === self.location.origin && url.pathname.startsWith("/__proxy__/")) {
+    event.respondWith(fetch(req));
+    return;
+  }
+
   // Proxy path: let network handle /github-assets (CF _redirects); do not rewrite to index
   if (url.origin === self.location.origin && url.pathname.startsWith("/github-assets/")) {
     event.respondWith(
