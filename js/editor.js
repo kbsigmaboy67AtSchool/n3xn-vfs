@@ -291,7 +291,14 @@ export async function openFile(path) {
   const text = file.text();
   const lang = detectLanguage(path);
   const model = monaco.editor.createModel(text, lang);
-  tab = { path, model, media: false, dirty: false, viewState: null };
+  try {
+    monaco.editor.setModelLanguage(model, lang);
+  } catch (_) {
+    try {
+      monaco.editor.setModelLanguage(model, "plaintext");
+    } catch (__) {}
+  }
+  tab = { path, model, media: false, dirty: false, viewState: null, language: lang };
   openTabs.push(tab);
   switchTo(path);
   updateTabUI();
@@ -466,28 +473,42 @@ function updateTabUI() {
 }
 
 function detectLanguage(path) {
-  const ext = path.split(".").pop()?.toLowerCase();
+  const base = (path || "").split("/").pop() || "";
+  const lower = base.toLowerCase();
+  // multi-dot extensions
+  if (lower.endsWith(".n3-site") || lower.endsWith(".n3site")) return "html";
+  if (lower.endsWith(".d.ts")) return "typescript";
+  const ext = lower.includes(".") ? lower.split(".").pop() : "";
   const map = {
     js: "javascript",
     mjs: "javascript",
+    cjs: "javascript",
     ts: "typescript",
     tsx: "typescript",
     jsx: "javascript",
     json: "json",
     html: "html",
     htm: "html",
+    xhtml: "html",
     css: "css",
     scss: "scss",
     less: "less",
     md: "markdown",
+    markdown: "markdown",
     py: "python",
-    "n3-site": "html",
+    pyw: "python",
+    n3site: "html",
     sh: "shell",
     bash: "shell",
     zsh: "shell",
+    fish: "shell",
     c: "c",
-    cpp: "cpp",
     h: "c",
+    cpp: "cpp",
+    cc: "cpp",
+    cxx: "cpp",
+    hpp: "cpp",
+    hh: "cpp",
     java: "java",
     go: "go",
     rs: "rust",
@@ -495,12 +516,63 @@ function detectLanguage(path) {
     php: "php",
     sql: "sql",
     xml: "xml",
+    svg: "xml",
     yaml: "yaml",
     yml: "yaml",
     toml: "ini",
     ini: "ini",
+    conf: "ini",
+    env: "ini",
     txt: "plaintext",
+    log: "plaintext",
+    // Monaco basic-languages (need corresponding language id)
+    lua: "lua",
+    luau: "lua",
+    rsx: "rust",
+    kt: "kotlin",
+    kts: "kotlin",
+    swift: "swift",
+    r: "r",
+    R: "r",
+    scala: "scala",
+    sc: "scala",
+    cs: "csharp",
+    fs: "fsharp",
+    fsx: "fsharp",
+    vb: "vb",
+    pl: "perl",
+    pm: "perl",
+    coffee: "coffeescript",
+    litcoffee: "coffeescript",
+    clj: "clojure",
+    cljs: "clojure",
+    ex: "elixir",
+    exs: "elixir",
+    dart: "dart",
+    graphql: "graphql",
+    gql: "graphql",
+    proto: "protobuf",
+    tf: "hcl",
+    hcl: "hcl",
+    sol: "sol",
+    wgsl: "wgsl",
+    dockerfile: "dockerfile",
+    makefile: "plaintext",
+    mk: "plaintext",
+    cmake: "plaintext",
+    nmath: "plaintext",
+    bf: "plaintext",
+    b: "plaintext",
+    scm: "scheme",
+    ss: "scheme",
+    lisp: "scheme",
+    nexc: "javascript",
+    vue: "html",
+    svelte: "html",
+    astro: "html",
   };
+  if (lower === "dockerfile" || lower.startsWith("dockerfile.")) return "dockerfile";
+  if (lower === "makefile" || lower === "gnumakefile") return "plaintext";
   return map[ext] || "plaintext";
 }
 
