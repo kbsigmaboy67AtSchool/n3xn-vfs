@@ -159,9 +159,12 @@ export function detectRunner(path) {
   if (e === "nexc") return "nexc";
   if (e === "lua") return "lua";
   if (e === "c" || e === "h") return "c";
-  if (e === "cpp" || e === "cc" || e === "cxx" || e === "hpp") return "cpp";
+  if (e === "cpp" || e === "cc" || e === "cxx" || e === "hpp" || e === "hh") return "cpp";
   if (e === "rs") return "rust";
   if (e === "go") return "go";
+  if (e === "sql") return "sql";
+  if (e === "scm" || e === "ss") return "scheme";
+  if (e === "bf" || e === "b") return "bf";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
   if (["md", "markdown"].includes(e)) return "markdown";
   if (e === "json") return "json";
@@ -451,11 +454,12 @@ export async function runText(path) {
 
 
 
-export async function runLangFile(path) {
+export async function runLangFile(path, lang) {
   const lr = await import("./lang-runner.js");
-  termPrint("Lang project: " + path, "out");
+  termPrint("Lang project: " + path + (lang ? " (" + lang + ")" : ""), "out");
   const result = await lr.runLanguageFile(path, {
     log: (m, c) => termPrint(m, c || "out"),
+    lang,
   });
   if (result?.url) termPrint(result.url, "ok");
   return result;
@@ -545,7 +549,11 @@ export async function run(path, mode) {
     case "cpp":
     case "rust":
     case "go":
-      return runLangFile(path);
+    case "sql":
+    case "scheme":
+    case "bf":
+    case "brainfuck":
+      return runLangFile(path, m === "brainfuck" ? "bf" : m);
     case "nexc":
       return (async () => {
         const { print } = await import("./terminal.js").catch(() => ({ print: console.log }));
