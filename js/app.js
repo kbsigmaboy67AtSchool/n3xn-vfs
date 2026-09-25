@@ -4,6 +4,7 @@
 
 import * as db from "./db.js";
 import * as fs from "./fs.js";
+import * as vfsPicker from "./vfs-picker.js";
 import * as term from "./terminal.js";
 import * as ed from "./editor.js";
 import * as runner from "./runner.js";
@@ -413,37 +414,91 @@ document.getElementById("btn-collab-fs")?.addEventListener("click", async () => 
 });
 
 document.getElementById("btn-new-file").onclick = async () => {
-  const name = prompt("File name (relative to current path):");
-  if (!name) return;
-  const base = document.getElementById("current-path").textContent || "/";
-  const path = base === "/" ? "/" + name : base.replace(/\/$/, "") + "/" + name;
-  // Ensure parents
-  const parts = path.split("/").filter(Boolean);
-  parts.pop();
-  let cur = "";
-  for (const p of parts) {
-    cur += "/" + p;
-    if (!fs.exists(cur)) await fs.mkdir(cur);
+  try {
+    const dest = await vfsPicker.chooseDestination("file");
+    if (!dest || dest.mode === "url") {
+      if (dest?.mode === "url") {
+        const { buf, name, mime } = await vfsPicker.fetchUrlToBytes(dest.url);
+        const dir = dest.dir || "/";
+        const path = dir.replace(/\/$/, "") + "/" + name;
+        await fs.writeFile(path, new Uint8Array(buf), { mime });
+        refreshTree();
+        await ed.openFile(path);
+        setStatus("Fetched " + path);
+        return;
+      }
+      return;
+    }
+    const name = prompt("File name:");
+    if (!name) return;
+    const base = dest.path || "/";
+    const path = (base === "/" ? "" : base.replace(/\/$/, "")) + "/" + name.replace(/^\/+/, "");
+    await fs.mkdir(vfsPicker.resolveWorkDir(path), { parents: true }).catch(() => {});
+    // ensure parent of file
+    const parent = path.slice(0, path.lastIndexOf("/")) || "/";
+    if (parent !== "/") await fs.mkdir(parent, { parents: true });
+    await fs.writeFile(path, "");
+    refreshTree();
+    await ed.openFile(path);
+    setStatus("Created " + path);
+  } catch (e) {
+    setStatus(String(e.message || e));
   }
-  await fs.writeFile(path, "");
-  refreshTree();
-  await ed.openFile(path);
 };
 
 document.getElementById("btn-new-folder").onclick = async () => {
-  const name = prompt("Folder name:");
-  if (!name) return;
-  const base = document.getElementById("current-path").textContent || "/";
-  const path = base === "/" ? "/" + name : base.replace(/\/$/, "") + "/" + name;
-  await fs.mkdir(path);
-  refreshTree();
+  try {
+    const dest = await vfsPicker.chooseDestination("folder");
+    if (!dest) return;
+    if (dest.mode === "url") {
+      setStatus("URL import is for files — use Import");
+      return;
+    }
+    const name = prompt("Folder name:");
+    if (!name) return;
+    const base = dest.path || "/";
+    const path = (base === "/" ? "" : base.replace(/\/$/, "")) + "/" + name.replace(/^\/+/, "");
+    await fs.mkdir(path, { parents: true });
+    refreshTree();
+    setStatus("Created folder " + path);
+  } catch (e) {
+    setStatus(String(e.message || e));
+  }
 };
 
-document.getElementById("btn-import").onclick = () => {
-  const choice = prompt("Import type:\n1 = Files\n2 = Folder\n3 = ZIP", "1");
-  if (choice === "1") document.getElementById("file-input").click();
-  else if (choice === "2") document.getElementById("folder-input").click();
-  else if (choice === "3") document.getElementById("zip-input").click();
+document.getElementById("btn-import").onclick = async () => {
+  try {
+    const kindChoice = await vfsPicker.glassConfirm({
+      title: "Import",
+      hint: "What are you bringing in?",
+      options: [
+        { id: "1", title: "Files", desc: "One or more files from the device" },
+        { id: "2", title: "Folder", desc: "Entire folder tree" },
+        { id: "3", title: "ZIP archive", desc: "Extract or place archive in VFS" },
+        { id: "url", title: "From URL", desc: "http(s) / data / blob into VFS" },
+      ],
+    });
+    if (!kindChoice) return;
+    if (kindChoice === "url") {
+      const dest = await vfsPicker.chooseDestination("import");
+      const url = dest?.mode === "url" ? dest.url : vfsPicker.normalizeFetchUrl(prompt("URL:") || "");
+      if (!url) return;
+      const dir = dest?.path || dest?.dir || vfsPicker.resolveWorkDir(document.getElementById("current-path")?.textContent);
+      const { buf, name, mime } = await vfsPicker.fetchUrlToBytes(url);
+      const path = (dir === "/" ? "" : dir.replace(/\/$/, "")) + "/" + name;
+      await fs.writeFile(path, new Uint8Array(buf), { mime });
+      refreshTree();
+      setStatus("Imported URL → " + path);
+      return;
+    }
+    window.__n3xnImportDest = await vfsPicker.chooseDestination(kindChoice === "3" ? "import-zip" : "import");
+    if (!window.__n3xnImportDest) return;
+    if (kindChoice === "1") document.getElementById("file-input").click();
+    else if (kindChoice === "2") document.getElementById("folder-input").click();
+    else if (kindChoice === "3") document.getElementById("zip-input").click();
+  } catch (e) {
+    setStatus(String(e.message || e));
+  }
 };
 
 document.getElementById("btn-import-fs").onclick = () => {
@@ -464,10 +519,26 @@ document.getElementById("btn-rebuild-tree").onclick = async () => {
 document.getElementById("file-input").onchange = async (e) => {
   const files = Array.from(e.target.files);
   if (!files.length) return;
-  const target = document.getElementById("current-path").textContent || "/";
+  const dest = window.__n3xnImportDest;
+  window.__n3xnImportDest = null;
+  let target = dest?.path || document.getElementById("current-path").textContent || "/";
+  if (dest?.mode === "replace" && files[0]) {
+    setStatus("Replacing " + dest.path);
+    try {
+      const buf = await files[0].arrayBuffer();
+      await fs.writeFile(dest.path, new Uint8Array(buf), { mime: files[0].type || "application/octet-stream" });
+      refreshTree();
+      setStatus("Replaced " + dest.path);
+    } catch (err) {
+      setStatus(String(err.message || err));
+    }
+    e.target.value = "";
+    return;
+  }
+  if (!fs.isDir(target)) target = vfsPicker.resolveWorkDir(target);
   setStatus(`Importing ${files.length} file(s)...`);
   try {
-    await fs.importFiles(files, fs.isDir(target) ? target : "/");
+    await fs.importFiles(files, target);
     refreshTree();
     setStatus(`Imported ${files.length} file(s)`);
   } catch (err) {
@@ -1141,3 +1212,5 @@ window.__n3xnRunXdebug = async (path) => {
     throw e;
   }
 };
+
+try { vfsPicker.installApi?.(); } catch (_e) {}
