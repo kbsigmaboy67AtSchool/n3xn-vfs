@@ -165,6 +165,7 @@ export function detectRunner(path) {
   if (e === "sql") return "sql";
   if (e === "scm" || e === "ss") return "scheme";
   if (e === "bf" || e === "b") return "bf";
+  if (e === "nmath") return "nmath";
   if (e === "kaboom" || (path || "").toLowerCase().includes("kaboom")) return "kaboom";
   if ((path || "").toLowerCase().includes("phaser")) return "phaser";
   if (["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"].includes(e)) return "image";
@@ -581,6 +582,16 @@ export async function run(path, mode) {
         if (m === "game") return gr.runGameAuto(path);
         return gr.runGamePack(path, m);
       })();
+    case "nmath":
+    case "ecalc":
+      return (async () => {
+        const nm = await import("./nmath.js");
+        const res = await nm.runNmathFile(path, {
+          log: (m, c) => termPrint(m, c || "ok"),
+        });
+        termPrint("nmath done", "ok");
+        return res;
+      })();
     case "nexc":
       return (async () => {
         const { print } = await import("./terminal.js").catch(() => ({ print: console.log }));
@@ -610,4 +621,82 @@ export async function runActive(mode) {
   const path = window.__n3xnActivePath;
   if (!path) throw new Error("No file open");
   return run(path, mode);
+}
+
+
+/** Run source string of a given type without writing a VFS file (-c-) */
+export async function runCodeInPlace(type, code, opts = {}) {
+  const t = (type || "js").toLowerCase();
+  const log = opts.log || termPrint;
+  if (t === "nmath" || t === "ecalc") {
+    const nm = await import("./nmath.js");
+    return nm.runNmath(code, { log });
+  }
+  if (t === "js" || t === "javascript") {
+    // eslint-disable-next-line no-new-func
+    const fn = new Function(code);
+    const v = fn();
+    if (v !== undefined) log(String(v), "ok");
+    return v;
+  }
+  if (t === "python" || t === "py") {
+    const { runPythonCode } = await import("./python.js").catch(() => ({}));
+    if (typeof runPythonCode === "function") return runPythonCode(code);
+    // fallback: temp not used — call pyodide if global
+    if (window.__n3xnPyodide) {
+      const r = await window.__n3xnPyodide.runPythonAsync(code);
+      log(String(r ?? "ok"), "ok");
+      return r;
+    }
+    throw new Error("Python runtime not ready");
+  }
+  if (t === "lua") {
+    const lr = await import("./lang-runner.js");
+    // write ephemeral only in memory via wasmoon
+    const LuaFactory = await lr.ensureLua();
+    const factory = new LuaFactory();
+    const lua = await factory.createEngine();
+    await lua.doString(code);
+    return true;
+  }
+  if (t === "sql") {
+    const lr = await import("./lang-runner.js");
+    // fake path-less: exec directly
+    const SQL = await lr.ensureSqlJs();
+    const db = new SQL.Database();
+    try {
+      const result = db.exec(code);
+      for (const row of result) {
+        log((row.columns || []).join("\t"), "ok");
+        for (const v of row.values || []) log(v.join("\t"), "out");
+      }
+    } finally {
+      db.close();
+    }
+    return true;
+  }
+  if (t === "bf" || t === "brainfuck") {
+    const lr = await import("./lang-runner.js");
+    return lr.runBrainfuck(code, { log });
+  }
+  if (t === "scheme") {
+    const lr = await import("./lang-runner.js");
+    // scheme needs path - use inline evaluate
+    const Biwa = await lr.ensureBiwa();
+    const interpreter = new Biwa.Interpreter((ar) => log(String(ar), "out"));
+    await new Promise((resolve, reject) => {
+      try {
+        interpreter.evaluate(code, resolve);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    return true;
+  }
+  // default: treat as nmath if looks English math else js
+  if (/\b(plus|minus|times|divided|square root|sum)\b/i.test(code)) {
+    const nm = await import("./nmath.js");
+    return nm.runNmath(code, { log });
+  }
+  throw new Error("run -c- unsupported type: " + t + " (try nmath|js|python|lua|sql|bf)");
 }
