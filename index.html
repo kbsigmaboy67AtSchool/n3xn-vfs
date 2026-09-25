@@ -137,6 +137,14 @@
                 <option value="html">HTML in-app</option>
                 <option value="js">Run JS</option>
                 <option value="python">Python (Pyodide)</option>
+                <option value="lua">Lua (Wasmoon WASM)</option>
+                <option value="c">C (multifile / WASM)</option>
+                <option value="cpp">C++ (multifile / WASM)</option>
+                <option value="rust">Rust (multifile / WASM)</option>
+                <option value="go">Go (multifile / WASM)</option>
+                <option value="sql">SQL (sql.js)</option>
+                <option value="scheme">Scheme (BiwaScheme)</option>
+                <option value="bf">Brainfuck</option>
                 <option value="n3-site">n3-site (multi-file HTML)</option>
                 <option value="react">React (JSX/TSX)</option>
                 <option value="image">Image</option>
@@ -169,6 +177,7 @@
         <div class="terminal-header" id="terminal-toggle">
           <span>Terminal</span>
           <div class="terminal-header-actions">
+            <button id="btn-term-multi" class="icon-btn" title="Multi-line editor (Monaco)">☰</button>
             <button id="btn-clear-term" class="icon-btn" title="Clear">🗑</button>
             <button id="btn-toggle-term" class="icon-btn" title="Collapse / Expand">▼</button>
           </div>
