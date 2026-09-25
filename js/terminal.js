@@ -2679,25 +2679,25 @@ async function cmdMinecraft(args) {
       print("Usage: minecraft skin <name-fragment>");
       return;
     }
-    const name = mc.listSkins().find((s) => s.includes(key)) || key;
-    print("Starting skin download…", "out");
-    mc.browserDownload("minecraft_skins", name.endsWith(".png") ? name : name + ".png");
+    try {
+      const r = await mc.fetchMcAsset("skin", key, (m) => print(m, "out"));
+      mc.downloadBlob(r.blob, r.filename);
+      print("Saved " + r.filename, "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
     return;
   }
 
-  // bare id
+  // bare id → same as get
   if (sub && sub !== "help") {
-    print("Starting browser download…", "out");
     try {
-      const versions = (await import("./minecraft.js")).MC_VERSIONS;
-      const ver =
-        versions.find((x) => x.id === sub || x.id.includes(sub)) ||
-        versions[Number(sub) - 1] ||
-        versions.find((x) => x.recommend);
-      mc.browserDownload("MINECRAFT", ver.file);
-      print("Then run: minecraft import", "ok");
+      const r = await mc.fetchMcAsset("game", args.join(" ") || sub, (m) => print(m, "out"));
+      print("Ready " + r.filename + " (" + Math.round(r.size / 1048576) + " MB) via " + r.method, "ok");
+      mc.openOfflineMc();
     } catch (e) {
       print(String(e.message || e), "err");
+      print("Fallback: minecraft import", "out");
     }
   }
 }
