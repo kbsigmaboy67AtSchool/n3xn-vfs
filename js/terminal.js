@@ -150,6 +150,7 @@ async function onKey(e) {
   }
 }
 
+window.__n3xnExecTerm = run;
 async function run(line) {
   let parts = parseArgs(line);
   let cmd = parts[0];
@@ -701,27 +702,79 @@ async function cmdPatch(args) {
 }
 
 async function cmdRun(args) {
-  // run [mode] <file>
-  // modes: html, html-window, js, image, markdown, json, css, text, dataurl, blob-open
-  let mode, path;
-  const modes = ["html", "html-window", "js", "image", "markdown", "md", "json", "css", "text", "dataurl", "blob-open", "auto"];
-  if (args.length === 0) {
-    path = window.__n3xnActivePath;
-    if (!path) throw new Error("Usage: run [mode] <file>  (or open a file first)");
-  } else if (modes.includes(args[0]) && args[1]) {
-    mode = args[0] === "auto" ? undefined : args[0];
-    path = resolve(args[1]);
-  } else if (modes.includes(args[0]) && !args[1]) {
-    mode = args[0] === "auto" ? undefined : args[0];
-    path = window.__n3xnActivePath;
-    if (!path) throw new Error("No file open");
-  } else {
-    path = resolve(args[0]);
-    mode = args[1] && modes.includes(args[1]) ? args[1] : undefined;
+  // run [type] <file>
+  // run [type] -c <code|url>
+  // run <file>
+  const modes = [
+    "html", "html-window", "js", "python", "py", "lua", "c", "cpp", "rust", "go",
+    "sql", "scheme", "bf", "brainfuck", "image", "markdown", "md", "json", "css",
+    "text", "dataurl", "blob-open", "react", "n3-site", "auto",
+  ];
+
+  async function resolveCodeArg(raw) {
+    let s = String(raw || "");
+    // strip surrounding quotes
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+      s = s.slice(1, -1);
+    }
+    const looksUrl =
+      /^(https?|data|blob):/i.test(s) ||
+      /^\/\//.test(s) ||
+      (/^[\w.-]+\.[a-z]{2,}/i.test(s) && !/\s/.test(s) && s.includes("/"));
+    if (looksUrl) {
+      let url = s;
+      if (!/^(https?|data|blob):/i.test(url)) {
+        if (url.startsWith("//")) url = "https:" + url;
+        else url = "https://" + url.replace(/^\/+/, "");
+      }
+      print("Fetching code from URL…", "out");
+      const res = await fetch(url, { credentials: "omit", redirect: "follow" });
+      if (!res.ok) throw new Error("Fetch failed " + res.status);
+      return await res.text();
+    }
+    return s;
   }
+
+  if (!args.length) {
+    const path = window.__n3xnActivePath;
+    if (!path) throw new Error("Usage: run [type] <file> | run [type] -c <code|url>");
+    print(`Running ${path}…`);
+    await runner.run(path);
+    print("Done", "ok");
+    return;
+  }
+
+  let mode = null;
+  let rest = args.slice();
+  if (modes.includes(rest[0]?.toLowerCase())) {
+    mode = rest.shift().toLowerCase();
+    if (mode === "auto") mode = undefined;
+    if (mode === "brainfuck") mode = "bf";
+    if (mode === "py") mode = "python";
+  }
+
+  if (rest[0] === "-c" || rest[0] === "--code") {
+    const codeRaw = rest.slice(1).join(" ");
+    if (!codeRaw) throw new Error("Usage: run [type] -c <code|url>");
+    const code = await resolveCodeArg(codeRaw);
+    const type = mode || "js";
+    print(`Running -c as ${type} (${code.length} chars)…`);
+    // write temp and run
+    const tmp = `/tmp/run-${type}-${Date.now()}.${type === "python" ? "py" : type === "lua" ? "lua" : type === "sql" ? "sql" : type === "scheme" ? "scm" : type === "bf" ? "bf" : type === "c" ? "c" : type === "cpp" ? "cpp" : type === "rust" ? "rs" : type === "go" ? "go" : "js"}`;
+    await fs.mkdir("/tmp", { parents: true }).catch(() => {});
+    await fs.writeFile(tmp, code);
+    await runner.run(tmp, type);
+    print("Done", "ok");
+    return;
+  }
+
+  const path = resolve(rest[0] || window.__n3xnActivePath);
+  if (!path) throw new Error("Usage: run [type] <file> | run [type] -c <code|url>");
+  // optional second mode token
+  if (!mode && rest[1] && modes.includes(rest[1])) mode = rest[1];
   print(`Running ${path}${mode ? " as " + mode : ""}…`);
   await runner.run(path, mode);
-  print("Done — blob URL logged above", "ok");
+  print("Done", "ok");
 }
 
 async function cmdBlobs(args) {
@@ -2708,3 +2761,85 @@ async function cmdN3xnChat() {
   const mc = await import("./minecraft.js");
   mc.openN3xnChat();
 }
+
+
+/* ========== Multi-line terminal (Monaco shell) ========== */
+let __termMulti = false;
+let __termMonaco = null;
+
+export function initTermMultiButton() {
+  const btn = document.getElementById("btn-term-multi");
+  if (!btn) return;
+  btn.onclick = () => toggleTermMulti();
+}
+
+async function toggleTermMulti() {
+  const input = document.getElementById("terminal-input");
+  const row = document.querySelector(".terminal-input-row");
+  if (!row) return;
+  __termMulti = !__termMulti;
+  if (!__termMulti) {
+    const host = document.getElementById("term-monaco-host");
+    if (host) host.remove();
+    if (input) input.style.display = "";
+    __termMonaco = null;
+    return;
+  }
+  if (input) input.style.display = "none";
+  let host = document.getElementById("term-monaco-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "term-monaco-host";
+    host.style.cssText = "flex:1;min-height:120px;height:160px;border:1px solid #1e293b;border-radius:6px;overflow:hidden";
+    row.style.flexDirection = "column";
+    row.style.alignItems = "stretch";
+    row.appendChild(host);
+  }
+  // reuse monaco from editor
+  await window.__n3xnEnsureMonaco?.();
+  const monaco = window.monaco;
+  if (!monaco) {
+    print("Monaco not ready", "err");
+    return;
+  }
+  if (__termMonaco) {
+    __termMonaco.layout();
+    return;
+  }
+  __termMonaco = monaco.editor.create(host, {
+    value: "",
+    language: "shell",
+    theme: (window.__n3xnMonacoSettings && window.__n3xnMonacoSettings.theme) || "vs-dark",
+    minimap: { enabled: false },
+    lineNumbers: "on",
+    wordWrap: "on",
+    fontSize: 13,
+    automaticLayout: true,
+    scrollBeyondLastLine: false,
+  });
+  __termMonaco.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, async () => {
+    const text = __termMonaco.getValue().trim();
+    if (!text) return;
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      print("n3xn@vfs:$ " + t, "cmd");
+      try {
+        await run(t);
+      } catch (e) {
+        print(String(e.message || e), "err");
+      }
+    }
+  });
+  print("Multi-line terminal on — Ctrl+Enter to run", "ok");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  try {
+    initTermMultiButton();
+  } catch (_) {}
+});
+// also try immediately
+try {
+  initTermMultiButton();
+} catch (_) {}
