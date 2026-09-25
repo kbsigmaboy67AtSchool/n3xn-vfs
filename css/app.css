@@ -141,6 +141,9 @@
 }
 
 .sidebar-header {
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: auto;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -154,6 +157,10 @@
 }
 
 .sidebar-actions {
+  flex-wrap: wrap;
+  max-width: 100%;
+  gap: 4px;
+  justify-content: flex-end;
   display: flex;
   gap: 2px;
 }
@@ -477,8 +484,32 @@
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   overflow: hidden;
-  transition: height 0.2s ease;
-  height: 220px;
+  height: var(--n3xn-term-h, 220px);
+  min-height: 32px;
+  max-height: 70vh;
+  position: relative;
+}
+.terminal-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: ns-resize;
+  z-index: 5;
+  background: transparent;
+}
+.terminal-resize-handle:hover,
+.terminal-resize-handle.dragging {
+  background: rgba(0, 243, 255, 0.25);
+}
+.main-layout {
+  /* ensure workspace fills remaining height above terminal */
+}
+.workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .terminal-panel.collapsed {
@@ -885,10 +916,13 @@
   pointer-events: auto;
 }
 .chat-sidebar.collapsed {
-  transform: translateX(calc(100% - 48px));
+  transform: translateX(100%);
+  pointer-events: none;
+  box-shadow: none;
 }
 .chat-sidebar.collapsed .chat-sidebar-body,
-.chat-sidebar.collapsed .chat-title {
+.chat-sidebar.collapsed .chat-title,
+.chat-sidebar.collapsed .chat-sidebar-header {
   visibility: hidden;
   pointer-events: none;
 }
