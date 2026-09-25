@@ -9,18 +9,32 @@ const TAG_GAME = "MINECRAFT";
 const TAG_SKINS = "minecraft_skins";
 const SHELL_CACHES = ["n3xn-shell-v11", "n3xn-shell-v10", "n3xn-shell-v9", "n3xn-shell-v8"];
 
-/** Optional CF Pages fetch-proxy (user-owned). Empty = disabled. */
+/**
+ * External fetch-proxy is OPTIONAL and OFF by default.
+ * Primary proxy is same-origin /__proxy__/ on n3xn (Pages middleware).
+ * Never defaults to external-proxy or any third-party host.
+ */
 const FETCH_PROXY_KEY = "n3xn_fetch_proxy";
 const FETCH_PROXY_ON_KEY = "n3xn_fetch_proxy_on";
-const DEFAULT_PROXY = "https://git-5y9.pages.dev/$/";
+
+(function clearStaleExternalProxy() {
+  try {
+    const v = localStorage.getItem(FETCH_PROXY_KEY) || "";
+    if (/git-5y9|pages\.dev\/\$\//i.test(v) && !localStorage.getItem("n3xn_fetch_proxy_force")) {
+      localStorage.setItem(FETCH_PROXY_KEY, "");
+      localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
+    }
+  } catch (_) {}
+})();
 
 export function getFetchProxy() {
   try {
     const v = localStorage.getItem(FETCH_PROXY_KEY);
-    if (v === "") return ""; // explicitly cleared
-    if (v) return v.endsWith("/") ? v : v + "/";
-  } catch (_) {}
-  return DEFAULT_PROXY;
+    if (!v) return "";
+    return v.endsWith("/") ? v : v + "/";
+  } catch (_) {
+    return "";
+  }
 }
 
 export function setFetchProxy(url) {
@@ -30,6 +44,13 @@ export function setFetchProxy(url) {
     return "";
   }
   let u = String(url).trim();
+  // Refuse known external default — user must want a custom host explicitly
+  if (/external-proxy\.pages\.dev/i.test(u)) {
+    console.warn("[n3xn] external external-proxy proxy ignored — use built-in /__proxy__/");
+    localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
+    localStorage.setItem(FETCH_PROXY_KEY, "");
+    return "";
+  }
   if (!u.endsWith("/")) u += "/";
   localStorage.setItem(FETCH_PROXY_KEY, u);
   localStorage.setItem(FETCH_PROXY_ON_KEY, "1");
@@ -38,27 +59,28 @@ export function setFetchProxy(url) {
 
 export function isProxyEnabled() {
   try {
-    // External proxy defaults OFF — use built-in /__proxy__ instead
-    if (localStorage.getItem(FETCH_PROXY_ON_KEY) === "1") return true;
-    return false;
+    return localStorage.getItem(FETCH_PROXY_ON_KEY) === "1" && !!getFetchProxy();
   } catch {
     return false;
   }
 }
 
 export function setProxyEnabled(on) {
+  if (on && !getFetchProxy()) {
+    // Do not auto-enable without an explicit custom base URL
+    localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
+    return false;
+  }
   localStorage.setItem(FETCH_PROXY_ON_KEY, on ? "1" : "0");
   return isProxyEnabled();
 }
 
-/** Build proxied URL: base + github.com/user/repo/releases/... */
 function proxiedUrl(tag, file) {
   const base = getFetchProxy();
   if (!base) return null;
   const host = ["git", "hub", ".com"].join("");
   const user = ["kbsigmaboy", "67AtSchool"].join("");
   const path = `${host}/${user}/minecraft/releases/download/${tag}/${file}`;
-  // base already ends with $/ or similar
   if (base.includes("$/")) return base + path;
   return base + path;
 }
@@ -306,11 +328,13 @@ export async function fetchMcAsset(kind, key, onProgress) {
   const finish = async (buf, method) => {
     const mime = filename.endsWith(".png") ? "image/png" : "text/html; charset=utf-8";
     const blob = new Blob([buf], { type: mime });
-    if (filename.endsWith(".html") && (filename.includes("wasm-gc.1.8.better") || kind === "game")) {
+    if (kind === "game" && filename.endsWith(".html")) {
       try {
         await seedMcHtml(buf, filename);
-        onProgress?.("Cached as /mc.html — offline play will not use the proxy again");
-      } catch (_) {}
+        onProgress?.("Cached as /mc.html — open same-origin (not about:blank)");
+      } catch (seedErr) {
+        onProgress?.("Cache seed: " + (seedErr.message || seedErr));
+      }
     }
     return {
       blob,
@@ -382,22 +406,39 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(u), 30_000);
 }
 
+/**
+ * Eagler/Chrome Minecraft must NOT run in about:blank.
+ * Workers, WASM, and relative assets need a real https origin.
+ * Always prefer same-origin /mc.html after seeding the SW cache.
+ */
+export function openMcWindow() {
+  const url = new URL("/mc.html", location.origin).href;
+  const w = window.open(url, "_blank", "noopener,noreferrer");
+  if (!w) throw new Error("Popup blocked — allow popups for this site");
+  return w;
+}
+
 export async function openMcInTab(key) {
   try {
-    const { blobUrl, filename, method } = await fetchMcAsset("game", key);
-    window.open(blobUrl, "_blank");
-    return { blobUrl, filename, method };
-  } catch (e) {
-    if (e && e.code === "NEED_IMPORT") {
-      // Download already started; tell caller to import
-      throw e;
+    const { blobUrl, filename, method, size } = await fetchMcAsset("game", key);
+    // Prefer same-origin /mc.html (already seeded inside finish() for game HTML)
+    try {
+      openMcWindow();
+      return { blobUrl, filename, method, opened: "/mc.html" };
+    } catch (pop) {
+      // last resort: blob URL (not about:blank) — some builds still run
+      const w = window.open(blobUrl, "_blank", "noopener,noreferrer");
+      if (!w) throw pop;
+      return { blobUrl, filename, method, opened: "blob", size };
     }
+  } catch (e) {
+    if (e && e.code === "NEED_IMPORT") throw e;
     throw e;
   }
 }
 
 export function openOfflineMc() {
-  window.open("/mc.html", "_blank");
+  openMcWindow();
 }
 
 export function openN3xnChat() {
