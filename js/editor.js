@@ -148,6 +148,19 @@ export function initEditor() {
 
     monacoReady = true;
     try {
+      const cl = await import("./custom-languages.js");
+      const log = (msg, cls) => {
+        try {
+          import("./terminal.js").then((t) => t.print?.(msg, cls || "out")).catch(() => console.info(msg));
+        } catch (_) {
+          console.info(msg);
+        }
+      };
+      await cl.loadCustomLanguages(window.monaco, { log });
+    } catch (err) {
+      console.info("[n3xn] No custom language definitions loaded");
+    }
+    try {
       navigator.serviceWorker?.controller?.postMessage({ type: "WARM_MONACO" });
     } catch (_) {}
     return editor;
@@ -475,9 +488,21 @@ function updateTabUI() {
 function detectLanguage(path) {
   const base = (path || "").split("/").pop() || "";
   const lower = base.toLowerCase();
+  // Custom Monarch langs from n3xn-lang-highlights.js (sync map filled at init)
+  try {
+    // dynamic import cache on window set by custom-languages
+    const getter = window.__n3xnGetCustomLangId;
+    if (typeof getter === "function") {
+      const cid = getter(path);
+      if (cid) return cid;
+    }
+  } catch (_) {}
   // multi-dot extensions
   if (lower.endsWith(".n3-site") || lower.endsWith(".n3site")) return "html";
   if (lower.endsWith(".d.ts")) return "typescript";
+  // built-in nmath/nexc before plaintext fallback (custom loader also registers these)
+  if (lower.endsWith(".nmath")) return "nmath";
+  if (lower.endsWith(".nexc")) return "nexc";
   const ext = lower.includes(".") ? lower.split(".").pop() : "";
   const map = {
     js: "javascript",
@@ -560,13 +585,13 @@ function detectLanguage(path) {
     makefile: "plaintext",
     mk: "plaintext",
     cmake: "plaintext",
-    nmath: "plaintext",
+    nmath: "nmath",
     bf: "plaintext",
     b: "plaintext",
     scm: "scheme",
     ss: "scheme",
     lisp: "scheme",
-    nexc: "javascript",
+    nexc: "nexc",
     vue: "html",
     svelte: "html",
     astro: "html",
