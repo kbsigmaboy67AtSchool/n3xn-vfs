@@ -253,6 +253,10 @@ async function run(line) {
       case "fetch":
         await cmdWebfile(["get", ...args]);
         break;
+      case "presence":
+      case "cursor-style":
+        await cmdPresence(args);
+        break;
       case "wss":
       case "collab":
       case "room":
@@ -2844,3 +2848,34 @@ document.addEventListener("DOMContentLoaded", () => {
 try {
   initTermMultiButton();
 } catch (_) {}
+
+
+async function cmdPresence(args) {
+  const collab = await import("./collab.js");
+  const sub = (args[0] || "show").toLowerCase();
+  if (sub === "show" || sub === "status") {
+    print(JSON.stringify(collab.getPresenceStyle(), null, 2));
+    return;
+  }
+  if (sub === "name") {
+    collab.setPresenceStyle({ name: args.slice(1).join(" ") || null });
+    print("Presence name set", "ok");
+    return;
+  }
+  if (sub === "color") {
+    collab.setPresenceStyle({ color: args[1] || null });
+    print("Caret color set — others see this on your cursor", "ok");
+    return;
+  }
+  if (sub === "sel" || sub === "selection") {
+    collab.setPresenceStyle({ selectionColor: args[1] || null });
+    print("Selection highlight color set", "ok");
+    return;
+  }
+  if (sub === "label") {
+    collab.setPresenceStyle({ labelBg: args[1], labelFg: args[2] || "#000" });
+    print("Name badge colors set", "ok");
+    return;
+  }
+  print("presence show|name <str>|color <#hex>|sel <#hex>|label <bg> [fg]");
+}
