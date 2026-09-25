@@ -1,140 +1,24 @@
 /**
  * Chromebook Minecraft helper
- * Release assets cannot be fetched() from the browser (CORS + proxy blocks).
- * Strategy: native browser download (top-level navigation) + local import to seed /mc.html.
- * Upstream host/repo are never printed in UI.
+ * All upstream mapping is server-side via /__proxy__/mc/<id>
+ * Client never constructs or opens github.com URLs.
  */
 
-const TAG_GAME = "MINECRAFT";
-const TAG_SKINS = "minecraft_skins";
 const SHELL_CACHES = ["n3xn-shell-v11", "n3xn-shell-v10", "n3xn-shell-v9", "n3xn-shell-v8"];
 
-/**
- * External fetch-proxy is OPTIONAL and OFF by default.
- * Primary proxy is same-origin /__proxy__/ on n3xn (Pages middleware).
- * Never defaults to external-proxy or any third-party host.
- */
-const FETCH_PROXY_KEY = "n3xn_fetch_proxy";
-const FETCH_PROXY_ON_KEY = "n3xn_fetch_proxy_on";
-
-(function clearStaleExternalProxy() {
-  try {
-    const v = localStorage.getItem(FETCH_PROXY_KEY) || "";
-    if (/git-5y9|pages\.dev\/\$\//i.test(v) && !localStorage.getItem("n3xn_fetch_proxy_force")) {
-      localStorage.setItem(FETCH_PROXY_KEY, "");
-      localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
-    }
-  } catch (_) {}
-})();
-
-export function getFetchProxy() {
-  try {
-    const v = localStorage.getItem(FETCH_PROXY_KEY);
-    if (!v) return "";
-    return v.endsWith("/") ? v : v + "/";
-  } catch (_) {
-    return "";
-  }
-}
-
-export function setFetchProxy(url) {
-  if (url == null || url === "off" || url === "clear") {
-    localStorage.setItem(FETCH_PROXY_KEY, "");
-    localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
-    return "";
-  }
-  let u = String(url).trim();
-  // Refuse known external default — user must want a custom host explicitly
-  if (/external-proxy\.pages\.dev/i.test(u)) {
-    console.warn("[n3xn] external external-proxy proxy ignored — use built-in /__proxy__/");
-    localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
-    localStorage.setItem(FETCH_PROXY_KEY, "");
-    return "";
-  }
-  if (!u.endsWith("/")) u += "/";
-  localStorage.setItem(FETCH_PROXY_KEY, u);
-  localStorage.setItem(FETCH_PROXY_ON_KEY, "1");
-  return u;
-}
-
-export function isProxyEnabled() {
-  try {
-    return localStorage.getItem(FETCH_PROXY_ON_KEY) === "1" && !!getFetchProxy();
-  } catch {
-    return false;
-  }
-}
-
-export function setProxyEnabled(on) {
-  if (on && !getFetchProxy()) {
-    // Do not auto-enable without an explicit custom base URL
-    localStorage.setItem(FETCH_PROXY_ON_KEY, "0");
-    return false;
-  }
-  localStorage.setItem(FETCH_PROXY_ON_KEY, on ? "1" : "0");
-  return isProxyEnabled();
-}
-
-function proxiedUrl(tag, file) {
-  const base = getFetchProxy();
-  if (!base) return null;
-  const host = ["git", "hub", ".com"].join("");
-  const user = ["kbsigmaboy", "67AtSchool"].join("");
-  const path = `${host}/${user}/minecraft/releases/download/${tag}/${file}`;
-  if (base.includes("$/")) return base + path;
-  return base + path;
-}
-
-function upstreamUrl(tag, file) {
-  const host = ["git", "hub", ".com"].join("");
-  const user = ["kbsigmaboy", "67AtSchool"].join("");
-  return `https://${host}/${user}/minecraft/releases/download/${tag}/${encodeURIComponent(file).replace(/%2F/gi, "/")}`;
-}
-
-/** Same-origin CF proxy path (works only if _redirects 200 proxy is live) */
-function siteProxyUrl(tag, file) {
-  return `/github-assets/${tag}/${file}`;
-}
-
-/** Built-in n3xn Pages Function proxy (JS-only, navigation → 404) */
-function internalProxyUrl(tag, file) {
-  const host = ["git", "hub", ".com"].join("");
-  const user = ["kbsigmaboy", "67AtSchool"].join("");
-  return `/__proxy__/$/${host}/${user}/minecraft/releases/download/${tag}/${file}`;
-}
-
-async function tryInternalProxy(tag, file, onProgress) {
-  const url = internalProxyUrl(tag, file);
-  onProgress?.("Trying n3xn internal proxy…");
-  const res = await fetch(url, {
-    credentials: "same-origin",
-    redirect: "follow",
-    headers: {
-      "X-N3xn-Proxy": "1",
-      Accept: "*/*",
-    },
-  });
-  if (!res.ok) throw new Error("Internal proxy HTTP " + res.status);
-  const buf = await res.arrayBuffer();
-  if (file.endsWith(".html") && buf.byteLength < 500_000) {
-    throw new Error("Internal proxy returned non-game file (" + buf.byteLength + " b)");
-  }
-  return buf;
-}
-
 export const MC_VERSIONS = [
-  { id: "1.8-better", file: "Xclounkit234X.wasm-gc.1.8.better.version.html", label: "1.8 WASM-GC better (recommended)", size: "~24 MB", recommend: true },
-  { id: "1.8", file: "Xclounkit234X.MINECRAFT.1.8.html", label: "1.8 classic", size: "~14 MB" },
-  { id: "1.12", file: "Xclounkit234X.MINECRAFT.1.12.html", label: "1.12", size: "~19 MB" },
-  { id: "1.14", file: "Xclounkit234X.MINECRAFT.1.14.4.html", label: "1.14.4", size: "~34 MB" },
-  { id: "1.16", file: "Xclounkit234X.MINECRAFT.1.16.html", label: "1.16 WASM-GC", size: "~51 MB" },
-  { id: "1.20.6", file: "Xclounkit234X.MINECRAFT.1.20.6.html", label: "1.20.6", size: "~53 MB" },
-  { id: "1.21.11", file: "Xclounkit234X.MINECRAFT.1.21.11.html", label: "1.21.11", size: "~47 MB" },
-  { id: "1.21.11-mobile", file: "1.21.11-mobile.html", label: "1.21.11 mobile", size: "~47 MB" },
-  { id: "1.21.11-desktop", file: "1.21.11-desktop.html", label: "1.21.11 desktop", size: "~47 MB" },
-  { id: "26.2", file: "26.2.html", label: "26.2 experimental", size: "~72 MB" },
-  { id: "0.6.1-pe", file: "0.6.1-pe.html", label: "0.6.1 PE", size: "~17 MB" },
-  { id: "1.6.4-wasm", file: "1.6.4-modpack-wasm.html", label: "1.6.4 modpack WASM", size: "~58 MB" },
+  { id: "1.8-better", label: "1.8 WASM-GC better (recommended)", size: "~24 MB", recommend: true },
+  { id: "1.8", label: "1.8 classic", size: "~14 MB" },
+  { id: "1.12", label: "1.12", size: "~19 MB" },
+  { id: "1.14", label: "1.14.4", size: "~34 MB" },
+  { id: "1.16", label: "1.16 WASM-GC", size: "~51 MB" },
+  { id: "1.20.6", label: "1.20.6", size: "~53 MB" },
+  { id: "1.21.11", label: "1.21.11", size: "~47 MB" },
+  { id: "1.21.11-mobile", label: "1.21.11 mobile", size: "~47 MB" },
+  { id: "1.21.11-desktop", label: "1.21.11 desktop", size: "~47 MB" },
+  { id: "26.2", label: "26.2 experimental", size: "~72 MB" },
+  { id: "0.6.1-pe", label: "0.6.1 PE", size: "~17 MB" },
+  { id: "1.6.4-wasm", label: "1.6.4 modpack WASM", size: "~58 MB" },
 ];
 
 export const MC_SKINS = [
@@ -161,12 +45,7 @@ function resolveVersion(key) {
   if (byNum) return byNum;
   return (
     MC_VERSIONS.find((v) => v.id === k) ||
-    MC_VERSIONS.find(
-      (v) =>
-        v.id.includes(k) ||
-        v.file.toLowerCase().includes(k) ||
-        v.label.toLowerCase().includes(k)
-    )
+    MC_VERSIONS.find((v) => v.id.includes(k) || v.label.toLowerCase().includes(k))
   );
 }
 
@@ -184,39 +63,45 @@ export function listSkins() {
   return MC_SKINS.slice();
 }
 
-/** Trigger a real browser download (no fetch / no CORS). */
-export function browserDownload(tag, file) {
-  const url = upstreamUrl(tag, file);
-  const a = document.createElement("a");
-  a.href = url;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
-  // download attr often ignored cross-origin; still opens the release asset
-  a.download = file;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  return { filename: file, method: "browser-download" };
+/** Opaque same-origin proxy URL — no upstream host in the path */
+function mcProxyUrl(id) {
+  return `/__proxy__/mc/${encodeURIComponent(id)}`;
 }
 
-/**
- * Seed SW cache + optional VFS so /mc.html works offline.
- */
+function skinProxyUrl(file) {
+  return `/__proxy__/skin/${encodeURIComponent(file)}`;
+}
+
+async function proxyFetch(url, onProgress, label) {
+  onProgress?.(label || "Downloading via n3xn proxy…");
+  const res = await fetch(url, {
+    credentials: "same-origin",
+    redirect: "follow",
+    headers: {
+      "X-N3xn-Proxy": "1",
+      Accept: "*/*",
+    },
+  });
+  if (!res.ok) throw new Error("Proxy HTTP " + res.status);
+  const buf = await res.arrayBuffer();
+  return buf;
+}
+
 export async function seedMcHtml(buf, filename = "minecraft.html") {
   if (!(buf instanceof ArrayBuffer) && !(buf instanceof Uint8Array)) {
     throw new Error("seedMcHtml expects ArrayBuffer");
   }
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
   if (bytes.byteLength < 500_000) {
-    throw new Error("File too small to be a Minecraft HTML build (" + bytes.byteLength + " bytes)");
+    throw new Error("File too small (" + bytes.byteLength + " bytes)");
   }
   const sample = new TextDecoder().decode(bytes.slice(0, 4000)).toLowerCase();
   if (sample.includes("n3xn virtual") || sample.includes('id="app"')) {
-    throw new Error("That file looks like the n3xn site shell, not Minecraft");
+    throw new Error("That file looks like the n3xn shell, not Minecraft");
   }
 
   const body = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const html = () =>
+  const makeRes = () =>
     new Response(body.slice(0), {
       status: 200,
       headers: {
@@ -230,25 +115,21 @@ export async function seedMcHtml(buf, filename = "minecraft.html") {
     for (const name of SHELL_CACHES) {
       try {
         const cache = await caches.open(name);
-        await cache.put(location.origin + "/mc.html", html());
-        await cache.put("/mc.html", html());
+        await cache.put(location.origin + "/mc.html", makeRes());
+        await cache.put("/mc.html", makeRes());
       } catch (_) {}
     }
   }
 
-  // Also stash in VFS if available
   try {
     const fs = await import("./fs.js");
     await fs.mkdir("/minecraft", { parents: true });
-    await fs.writeFile("/minecraft/" + filename, new Uint8Array(body), {
-      mime: "text/html",
-    });
+    await fs.writeFile("/minecraft/" + filename, new Uint8Array(body), { mime: "text/html" });
   } catch (_) {}
 
   return { size: bytes.byteLength, filename };
 }
 
-/** File picker → seed /mc.html → optional open */
 export function importLocalFile({ open = true } = {}) {
   return new Promise((resolve, reject) => {
     const input = document.createElement("input");
@@ -260,9 +141,7 @@ export function importLocalFile({ open = true } = {}) {
         if (!file) return reject(new Error("No file chosen"));
         const buf = await file.arrayBuffer();
         const seeded = await seedMcHtml(buf, file.name || "minecraft.html");
-        if (open) {
-          window.open("/mc.html", "_blank");
-        }
+        if (open) openMcWindow();
         resolve(seeded);
       } catch (e) {
         reject(e);
@@ -272,126 +151,66 @@ export function importLocalFile({ open = true } = {}) {
   });
 }
 
-/**
- * Try same-origin /github-assets proxy (CF _redirects on this site).
- */
-export async function trySiteProxyFetch(tag, file, onProgress) {
-  const url = siteProxyUrl(tag, file);
-  onProgress?.("Trying site proxy…");
-  const res = await fetch(url, { credentials: "omit", redirect: "follow" });
-  if (!res.ok) throw new Error("Site proxy HTTP " + res.status);
-  const buf = await res.arrayBuffer();
-  if (file.endsWith(".html") && buf.byteLength < 500_000) {
-    throw new Error("Site proxy returned non-game file (" + buf.byteLength + " b)");
-  }
-  return buf;
-}
-
-/**
- * Optional user CF Pages fetch-proxy (e.g. git-*.pages.dev/$/…).
- * Uses credentials:include so a prior passcode unlock on that origin may apply.
- * ONE successful download → seed /mc.html → never need proxy again for offline play.
- */
-export async function tryUserFetchProxy(tag, file, onProgress) {
-  if (!isProxyEnabled()) throw new Error("User fetch-proxy disabled");
-  const url = proxiedUrl(tag, file);
-  if (!url) throw new Error("No fetch-proxy configured");
-  onProgress?.("Trying your fetch-proxy (one-shot; then cached)…");
-  const res = await fetch(url, {
-    credentials: "include",
-    mode: "cors",
-    redirect: "follow",
-  });
-  if (!res.ok) throw new Error("Fetch-proxy HTTP " + res.status);
-  const buf = await res.arrayBuffer();
-  if (file.endsWith(".html") && buf.byteLength < 500_000) {
-    throw new Error("Fetch-proxy returned non-game file (" + buf.byteLength + " b)");
-  }
-  return buf;
-}
-
 export async function fetchMcAsset(kind, key, onProgress) {
-  let file, filename, tag;
   if (kind === "skin") {
     const name = MC_SKINS.find((s) => s === key || s.includes(key)) || key;
-    file = name;
-    filename = name.endsWith(".png") ? name : name + ".png";
-    tag = TAG_SKINS;
-  } else {
-    const v = resolveVersion(key);
-    if (!v) throw new Error("Unknown version. Run: minecraft list");
-    file = v.file;
-    filename = v.file;
-    tag = TAG_GAME;
-  }
-
-  const finish = async (buf, method) => {
-    const mime = filename.endsWith(".png") ? "image/png" : "text/html; charset=utf-8";
-    const blob = new Blob([buf], { type: mime });
-    if (kind === "game" && filename.endsWith(".html")) {
-      try {
-        await seedMcHtml(buf, filename);
-        onProgress?.("Cached as /mc.html — open same-origin (not about:blank)");
-      } catch (seedErr) {
-        onProgress?.("Cache seed: " + (seedErr.message || seedErr));
-      }
-    }
+    const filename = name.endsWith(".png") ? name : name + ".png";
+    const buf = await proxyFetch(skinProxyUrl(filename), onProgress, "Skin via n3xn proxy…");
+    const blob = new Blob([buf], { type: "image/png" });
     return {
       blob,
       blobUrl: URL.createObjectURL(blob),
       filename,
       size: buf.byteLength,
-      mime,
-      method,
+      mime: "image/png",
+      method: "n3xn-proxy",
     };
-  };
+  }
 
-  // 0) Already in SW cache as /mc.html for recommended build?
-  if (kind === "game" && filename.includes("wasm-gc.1.8.better") && "caches" in self) {
+  const v = resolveVersion(key);
+  if (!v) throw new Error("Unknown version. Run: minecraft list");
+  const id = v.id;
+  const filename = id + ".html";
+
+  // Cached /mc.html for recommended build
+  if (id === "1.8-better" && "caches" in self) {
     try {
       for (const name of SHELL_CACHES) {
         const cache = await caches.open(name);
         const hit = (await cache.match("/mc.html")) || (await cache.match(location.origin + "/mc.html"));
-        if (!hit) continue;
-        if (hit.headers.get("X-N3xn-Mc") === "0") continue;
+        if (!hit || hit.headers.get("X-N3xn-Mc") === "0") continue;
         const buf = await hit.arrayBuffer();
         if (buf.byteLength > 500_000) {
-          onProgress?.("Using cached /mc.html (0 proxy bandwidth)");
-          return finish(buf, "sw-cache");
+          onProgress?.("Using cached /mc.html");
+          const blob = new Blob([buf], { type: "text/html; charset=utf-8" });
+          return {
+            blob,
+            blobUrl: URL.createObjectURL(blob),
+            filename,
+            size: buf.byteLength,
+            mime: "text/html",
+            method: "sw-cache",
+          };
         }
       }
     } catch (_) {}
   }
 
-  // 1) Built-in /__proxy__/$/… (Pages Function, JS-only)
-  try {
-    return await finish(await tryInternalProxy(tag, file, onProgress), "n3xn-proxy");
-  } catch (e) {
-    onProgress?.("n3xn proxy skip: " + (e.message || e));
+  const buf = await proxyFetch(mcProxyUrl(id), onProgress, "n3xn proxy…");
+  if (buf.byteLength < 500_000) {
+    throw new Error("Proxy returned incomplete file (" + buf.byteLength + " bytes). Is functions/_middleware.js deployed?");
   }
-
-  // 2) same-origin /github-assets on this site
-  try {
-    return await finish(await trySiteProxyFetch(tag, file, onProgress), "site-proxy");
-  } catch (e) {
-    onProgress?.("Site proxy skip: " + (e.message || e));
-  }
-
-  // 3) Optional external user fetch-proxy (git-*.pages.dev) — off if you want to save quota
-  try {
-    return await finish(await tryUserFetchProxy(tag, file, onProgress), "user-proxy");
-  } catch (e) {
-    onProgress?.("Fetch-proxy skip: " + (e.message || e));
-  }
-
-  // 3) Browser download + import (0 CF proxy bandwidth)
-  browserDownload(tag, file);
-  const err = new Error(
-    "Auto-fetch blocked. Browser download started. When done: minecraft import"
-  );
-  err.code = "NEED_IMPORT";
-  err.filename = filename;
-  throw err;
+  await seedMcHtml(buf, filename);
+  onProgress?.("Cached /mc.html");
+  const blob = new Blob([buf], { type: "text/html; charset=utf-8" });
+  return {
+    blob,
+    blobUrl: URL.createObjectURL(blob),
+    filename,
+    size: buf.byteLength,
+    mime: "text/html",
+    method: "n3xn-proxy",
+  };
 }
 
 export function downloadBlob(blob, filename) {
@@ -406,11 +225,11 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(u), 30_000);
 }
 
-/**
- * Eagler/Chrome Minecraft must NOT run in about:blank.
- * Workers, WASM, and relative assets need a real https origin.
- * Always prefer same-origin /mc.html after seeding the SW cache.
- */
+/** @deprecated — never open upstream hosts from the client */
+export function browserDownload() {
+  throw new Error("Direct upstream download disabled. Use: minecraft get <id>");
+}
+
 export function openMcWindow() {
   const url = new URL("/mc.html", location.origin).href;
   const w = window.open(url, "_blank", "noopener,noreferrer");
@@ -419,22 +238,9 @@ export function openMcWindow() {
 }
 
 export async function openMcInTab(key) {
-  try {
-    const { blobUrl, filename, method, size } = await fetchMcAsset("game", key);
-    // Prefer same-origin /mc.html (already seeded inside finish() for game HTML)
-    try {
-      openMcWindow();
-      return { blobUrl, filename, method, opened: "/mc.html" };
-    } catch (pop) {
-      // last resort: blob URL (not about:blank) — some builds still run
-      const w = window.open(blobUrl, "_blank", "noopener,noreferrer");
-      if (!w) throw pop;
-      return { blobUrl, filename, method, opened: "blob", size };
-    }
-  } catch (e) {
-    if (e && e.code === "NEED_IMPORT") throw e;
-    throw e;
-  }
+  await fetchMcAsset("game", key);
+  openMcWindow();
+  return { opened: "/mc.html" };
 }
 
 export function openOfflineMc() {
@@ -442,10 +248,9 @@ export function openOfflineMc() {
 }
 
 export function openN3xnChat() {
-  window.open("/n3xn-chat.html", "_blank");
+  window.open("/n3xn-chat.html", "_blank", "noopener,noreferrer");
 }
 
-/** Load from VFS path into /mc.html cache and open */
 export async function loadFromVfs(path) {
   const fs = await import("./fs.js");
   const f = await fs.readFile(path);
@@ -459,4 +264,18 @@ export async function loadFromVfs(path) {
   await seedMcHtml(buf, path.split("/").pop() || "minecraft.html");
   openOfflineMc();
   return { path, size: buf.byteLength };
+}
+
+// External proxy stubs (disabled — kept so terminal proxy cmds don't crash)
+export function getFetchProxy() {
+  return "";
+}
+export function setFetchProxy() {
+  return "";
+}
+export function isProxyEnabled() {
+  return false;
+}
+export function setProxyEnabled() {
+  return false;
 }
