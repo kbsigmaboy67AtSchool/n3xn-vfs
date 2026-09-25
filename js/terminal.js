@@ -707,7 +707,8 @@ async function cmdRun(args) {
   // run <file>
   const modes = [
     "html", "html-window", "js", "python", "py", "lua", "c", "cpp", "rust", "go",
-    "sql", "scheme", "bf", "brainfuck", "image", "markdown", "md", "json", "css",
+    "sql", "scheme", "bf", "brainfuck", "kaboom", "phaser", "pixi", "three", "matter", "p5", "game",
+    "image", "markdown", "md", "json", "css",
     "text", "dataurl", "blob-open", "react", "n3-site", "auto",
   ];
 
