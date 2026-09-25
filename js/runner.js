@@ -286,9 +286,160 @@ export async function runHtml(path) {
   return url;
 }
 
-/* ========== 3. JS → wrapped runner page as blob ========== */
+
+/* ========== JS REPL helpers (terminal logger) ========== */
+export function inspectValue(val, depth = 0) {
+  if (val === undefined) return "undefined";
+  if (val === null) return "null";
+  if (typeof val === "string") return JSON.stringify(val);
+  if (typeof val === "number" || typeof val === "boolean" || typeof val === "bigint") return String(val);
+  if (typeof val === "symbol") return val.toString();
+  if (typeof val === "function") {
+    const name = val.name || "anonymous";
+    const src = Function.prototype.toString.call(val);
+    const short = src.length > 120 ? src.slice(0, 117) + "..." : src;
+    return `[Function ${name}] ${short}`;
+  }
+  if (val instanceof Error) return val.stack || String(val);
+  if (val instanceof Date) return val.toISOString();
+  if (typeof Element !== "undefined" && val instanceof Element) {
+    return `<${val.tagName.toLowerCase()}${val.id ? "#" + val.id : ""}>`;
+  }
+  try {
+    return JSON.stringify(val, (_k, v) => {
+      if (typeof v === "function") return `[Function ${v.name || "anonymous"}]`;
+      if (typeof v === "bigint") return v.toString() + "n";
+      if (v instanceof Error) return { name: v.name, message: v.message };
+      return v;
+    }, 2);
+  } catch (_) {
+    try {
+      return Object.prototype.toString.call(val) + " " + String(val);
+    } catch {
+      return Object.prototype.toString.call(val);
+    }
+  }
+}
+
+function formatConsoleArgs(args) {
+  return args.map((a) => {
+    if (typeof a === "string") return a;
+    return inspectValue(a);
+  }).join(" ");
+}
+
+/** Intercept console.* → terminal (and optional extra sink) during fn() */
+export async function withConsoleCapture(fn, log = termPrint) {
+  const methods = ["log", "info", "warn", "error", "dir", "debug", "table"];
+  const orig = {};
+  for (const m of methods) {
+    orig[m] = console[m];
+    console[m] = (...args) => {
+      const prefix =
+        m === "log" ? "" :
+        m === "info" ? "[info] " :
+        m === "warn" ? "[warn] " :
+        m === "error" ? "[error] " :
+        m === "dir" ? "[dir] " :
+        m === "debug" ? "[debug] " :
+        m === "table" ? "[table] " : `[${m}] `;
+      const cls =
+        m === "error" ? "err" :
+        m === "warn" ? "out" :
+        m === "info" ? "ok" : "out";
+      try {
+        if (m === "table" && args[0] != null) {
+          log(prefix + inspectValue(args[0]), cls);
+        } else if (m === "dir") {
+          log(prefix + inspectValue(args[0]), cls);
+        } else {
+          log(prefix + formatConsoleArgs(args), cls);
+        }
+      } catch (_) {}
+      try {
+        orig[m].apply(console, args);
+      } catch (_) {}
+    };
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const m of methods) {
+      if (orig[m]) console[m] = orig[m];
+    }
+  }
+}
+
+/**
+ * Wrap source so the last expression's value is returned (REPL style).
+ */
+export function wrapJsReplSource(code) {
+  const src = String(code || "").replace(/\r\n/g, "\n").trim();
+  if (!src) return "return undefined;";
+  // Prefer full script as expression
+  // Multi-line: return last statement if it looks like an expression
+  const lines = src.split("\n");
+  let lastIdx = lines.length - 1;
+  while (lastIdx >= 0 && (!lines[lastIdx].trim() || lines[lastIdx].trim().startsWith("//"))) lastIdx--;
+  if (lastIdx < 0) return src;
+  const last = lines[lastIdx].trim();
+  const isBlock =
+    /^(return|throw|const|let|var|function|class|if|for|while|do|switch|try|import|export|async\s+function)\b/.test(last) ||
+    last.endsWith("{") ||
+    last.endsWith(";") && /^(return|throw|const|let|var)\b/.test(last);
+  // If single expression-ish line without trailing semicolon assignment-only
+  if (!isBlock && !/^(return|throw)\b/.test(last)) {
+    const before = lines.slice(0, lastIdx).join("\n");
+    const expr = last.replace(/;+\s*$/, "");
+    return (before ? before + "\n" : "") + "return (" + expr + ");";
+  }
+  // Already statements — try append return of last decl name if const/let x = ...
+  const decl = last.match(/^(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=/);
+  if (decl) {
+    const before = lines.slice(0, lastIdx + 1).join("\n");
+    return before + "\nreturn " + decl[1] + ";";
+  }
+  return src;
+}
+
+/** Evaluate JS in n3xn context with implicit last-value + console capture */
+export async function evaluateJsRepl(code, log = termPrint) {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const wrapped = wrapJsReplSource(code);
+  return withConsoleCapture(async () => {
+    let result;
+    try {
+      const fn = new AsyncFunction(wrapped);
+      result = await fn();
+    } catch (e1) {
+      // Fallback: run as plain body without return wrap
+      try {
+        const fn2 = new AsyncFunction(String(code || ""));
+        result = await fn2();
+      } catch (e2) {
+        log(String(e2 && e2.stack ? e2.stack : e2), "err");
+        throw e2;
+      }
+    }
+    if (result !== undefined) {
+      log("=> " + inspectValue(result), "ok");
+    }
+    return result;
+  }, log);
+}
+
+/* ========== 3. JS → terminal REPL (+ optional blob window) ========== */
 export async function runJs(path) {
   const code = await readText(path);
+  termPrint(`Running JS (REPL) ${path}…`, "out");
+  try {
+    await evaluateJsRepl(code, termPrint);
+  } catch (_) {
+    /* errors already printed */
+  }
+  termPrint("Done", "ok");
+
+  // Also open a blob runner window with the same pretty console (optional second view)
   const name = path.split("/").pop();
   const page = `<!DOCTYPE html>
 <html>
@@ -303,45 +454,67 @@ export async function runJs(path) {
     #log{padding:12px 14px;white-space:pre-wrap;word-break:break-all;min-height:50vh}
     .log-log{color:#aaa}.log-info{color:#8af}.log-warn{color:#fa0}
     .log-error{color:#f66}.log-result{color:#4f8;margin-top:8px;border-top:1px solid #222;padding-top:8px}
+    .log-dir{color:#c4b5fd}.log-debug{color:#64748b}
   </style>
 </head>
 <body>
-  <div id="bar"><strong>n3xn</strong><span>JS Runner</span><span style="opacity:.5">${escapeHtml(path)}</span></div>
+  <div id="bar"><strong>n3xn</strong><span>JS REPL</span><span style="opacity:.5">${escapeHtml(path)}</span></div>
   <div id="log"></div>
   <script>
     const logEl = document.getElementById('log');
+    function inspect(val) {
+      if (val === undefined) return 'undefined';
+      if (val === null) return 'null';
+      if (typeof val === 'function') return Function.prototype.toString.call(val).slice(0, 200);
+      if (typeof val === 'string') return JSON.stringify(val);
+      if (typeof val !== 'object') return String(val);
+      try { return JSON.stringify(val, null, 2); } catch { return String(val); }
+    }
     function append(cls, args) {
       const line = document.createElement('div');
       line.className = cls;
-      line.textContent = args.map(a => {
-        try { return typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a); }
-        catch { return String(a); }
-      }).join(' ');
+      line.textContent = args.map(a => typeof a === 'string' ? a : inspect(a)).join(' ');
       logEl.appendChild(line);
     }
-    const _l = console.log, _w = console.warn, _e = console.error, _i = console.info;
-    console.log = (...a) => { append('log-log', a); _l.apply(console, a); };
-    console.info = (...a) => { append('log-info', a); _i.apply(console, a); };
-    console.warn = (...a) => { append('log-warn', a); _w.apply(console, a); };
-    console.error = (...a) => { append('log-error', a); _e.apply(console, a); };
+    const methods = ['log','info','warn','error','dir','debug'];
+    const orig = {};
+    methods.forEach(m => {
+      orig[m] = console[m];
+      console[m] = (...a) => {
+        append('log-' + (m === 'log' ? 'log' : m), m === 'log' ? a : ['[' + m + ']', ...a]);
+        orig[m].apply(console, a);
+      };
+    });
     window.onerror = (msg, s, line, col) => append('log-error', [msg + (line ? ' @ ' + line + ':' + col : '')]);
     window.addEventListener('unhandledrejection', e => append('log-error', ['Unhandled: ' + e.reason]));
-    try {
-      const __r = (function() {
-${code}
-      })();
-      if (__r !== undefined) append('log-result', ['→', __r]);
-    } catch (e) {
-      append('log-error', [e && e.stack ? e.stack : String(e)]);
-    }
-  </script>
+    (async () => {
+      try {
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+        const src = ${JSON.stringify(code)};
+        // same wrap as host REPL (simplified: try return (expr))
+        let result;
+        try {
+          result = await new AsyncFunction('return (async () => {\n' + src + '\n})()')();
+        } catch {
+          result = await new AsyncFunction(src)();
+        }
+        if (result !== undefined) append('log-result', ['=>', result]);
+      } catch (e) {
+        append('log-error', [e && e.stack ? e.stack : String(e)]);
+      }
+    })();
+  <\/script>
 </body>
 </html>`;
-  const { url } = createBlobFromText(page, "text/html", `js-runner:${path}`);
-  const w = window.open(url, "_blank");
-  if (!w) throw new Error("Popup blocked — allow popups");
-  termPrint(`JS runner opened: ${path}`, "ok");
-  return url;
+  try {
+    const { url } = createBlobFromText(page, "text/html", `js-runner:${path}`);
+    window.open(url, "_blank", "noopener");
+    termPrintLink("[blob window]", url);
+    return url;
+  } catch (e) {
+    termPrint("Blob window skipped: " + (e.message || e), "out");
+    return null;
+  }
 }
 
 /* ========== 4. Image ========== */
@@ -633,11 +806,7 @@ export async function runCodeInPlace(type, code, opts = {}) {
     return nm.runNmath(code, { log });
   }
   if (t === "js" || t === "javascript") {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function(code);
-    const v = fn();
-    if (v !== undefined) log(String(v), "ok");
-    return v;
+    return evaluateJsRepl(code, log);
   }
   if (t === "python" || t === "py") {
     const { runPythonCode } = await import("./python.js").catch(() => ({}));
