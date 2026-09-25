@@ -207,6 +207,47 @@ function revokeTabBlob(tab) {
   }
 }
 
+
+/** Huge-file Monaco profile — auto when size exceeds thresholds; user can override via window.__n3xnEditorPerfOverride */
+export function applySizeAwareEditorOptions(sizeBytes, force) {
+  if (!editor || !window.monaco) return;
+  const override = window.__n3xnEditorPerfOverride; // { wordWrap, minimap, language, ... } or null
+  const MB = 1024 * 1024;
+  let opts = {};
+  if (force === "full") {
+    opts = { wordWrap: "on", minimap: { enabled: true }, renderValidationDecorations: "on" };
+  } else if (sizeBytes > 70 * MB || force === "text") {
+    opts = {
+      wordWrap: "off",
+      minimap: { enabled: false },
+      renderValidationDecorations: "off",
+      folding: false,
+      links: false,
+      colorDecorators: false,
+      occurrencesHighlight: false,
+      renderLineHighlight: "none",
+      quickSuggestions: false,
+      parameterHints: { enabled: false },
+      suggestOnTriggerCharacters: false,
+      largeFileOptimizations: true,
+      stopRenderingLineAfter: 5000,
+    };
+  } else if (sizeBytes > 5 * MB) {
+    opts = {
+      wordWrap: "off",
+      minimap: { enabled: false },
+      folding: false,
+      renderValidationDecorations: "off",
+      largeFileOptimizations: true,
+    };
+  } else if (sizeBytes > 1 * MB) {
+    opts = { minimap: { enabled: false }, largeFileOptimizations: true };
+  }
+  if (override && typeof override === "object") opts = { ...opts, ...override };
+  editor.updateOptions(opts);
+  return opts;
+}
+
 export async function openFile(path) {
   if (!monacoReady) return;
 
@@ -503,6 +544,14 @@ export async function openMemoryFile(path, bytes, mime) {
               : "plaintext"
     );
     editor.setModel(model);
+  try {
+    const _sz = (typeof text === "string" ? new TextEncoder().encode(text).length : (file?.size || 0));
+    applySizeAwareEditorOptions(_sz);
+    if (_sz > 70 * 1024 * 1024) {
+      try { monaco.editor.setModelLanguage(editor.getModel(), "plaintext"); } catch (_) {}
+    }
+  } catch (_) {}
+
   }
   try {
     document.getElementById("current-path").textContent = path;
