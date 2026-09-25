@@ -25,6 +25,11 @@ const EXT_LANG = {
   jsx: "react",
   ts: "js",
   tsx: "react",
+  sql: "sql",
+  scm: "scheme",
+  ss: "scheme",
+  bf: "bf",
+  b: "bf",
 };
 
 function normalize(path) {
@@ -276,6 +281,127 @@ function escapeHtml(s) {
     .replace(/>/g, "&gt;");
 }
 
+
+export function detectLang(path) {
+  return EXT_LANG[extOf(path)] || null;
+}
+
+
+/* ========== Extra offline languages ========== */
+
+let sqlJsReady = null;
+export async function ensureSqlJs() {
+  if (window.initSqlJs && sqlJsReady) return sqlJsReady;
+  sqlJsReady = (async () => {
+    if (!window.initSqlJs) {
+      await new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = navigator.serviceWorker?.controller
+          ? "/__cdn__/jsdelivr/npm/sql.js@1.11.0/dist/sql-wasm.js"
+          : "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.js";
+        s.onload = resolve;
+        s.onerror = () => reject(new Error("sql.js load failed"));
+        document.head.appendChild(s);
+      });
+    }
+    const base = navigator.serviceWorker?.controller
+      ? "/__cdn__/jsdelivr/npm/sql.js@1.11.0/dist/"
+      : "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/";
+    return window.initSqlJs({ locateFile: (f) => base + f });
+  })();
+  return sqlJsReady;
+}
+
+export async function runSql(path, opts = {}) {
+  const log = opts.log || console.log;
+  const f = await fs.readFile(path);
+  const sql = f.text();
+  log("SQL (sql.js WASM)…", "out");
+  const SQL = await ensureSqlJs();
+  const db = new SQL.Database();
+  try {
+    const result = db.exec(sql);
+    for (const r of result) {
+      log((r.columns || []).join("\t"), "ok");
+      for (const row of r.values || []) log(row.join("\t"), "out");
+    }
+    if (!result.length) log("(no result sets)", "out");
+  } finally {
+    db.close();
+  }
+  return { ok: true };
+}
+
+let biwaReady = null;
+export async function ensureBiwa() {
+  if (window.BiwaScheme) return window.BiwaScheme;
+  if (biwaReady) return biwaReady;
+  biwaReady = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = navigator.serviceWorker?.controller
+      ? "/__cdn__/jsdelivr/npm/biwascheme@0.8.0/release/biwascheme-min.js"
+      : "https://cdn.jsdelivr.net/npm/biwascheme@0.8.0/release/biwascheme-min.js";
+    s.onload = () => resolve(window.BiwaScheme);
+    s.onerror = () => reject(new Error("BiwaScheme load failed"));
+    document.head.appendChild(s);
+  });
+  return biwaReady;
+}
+
+export async function runScheme(path, opts = {}) {
+  const log = opts.log || console.log;
+  const code = (await fs.readFile(path)).text();
+  log("Scheme (BiwaScheme)…", "out");
+  const Biwa = await ensureBiwa();
+  const interpreter = new Biwa.Interpreter((ar) => log(String(ar), "out"));
+  await new Promise((resolve, reject) => {
+    try {
+      interpreter.evaluate(code, resolve);
+    } catch (e) {
+      reject(e);
+    }
+  });
+  return { ok: true };
+}
+
+export function runBrainfuck(code, opts = {}) {
+  const log = opts.log || console.log;
+  const tape = new Uint8Array(30000);
+  let ptr = 0;
+  let ip = 0;
+  let out = "";
+  const stack = [];
+  const jumps = {};
+  for (let i = 0; i < code.length; i++) {
+    if (code[i] === "[") stack.push(i);
+    if (code[i] === "]") {
+      const s = stack.pop();
+      jumps[s] = i;
+      jumps[i] = s;
+    }
+  }
+  let steps = 0;
+  const LIMIT = 10_000_000;
+  while (ip < code.length && steps++ < LIMIT) {
+    const c = code[ip];
+    if (c === ">") ptr = (ptr + 1) % tape.length;
+    else if (c === "<") ptr = (ptr - 1 + tape.length) % tape.length;
+    else if (c === "+") tape[ptr] = (tape[ptr] + 1) & 255;
+    else if (c === "-") tape[ptr] = (tape[ptr] - 1) & 255;
+    else if (c === ".") out += String.fromCharCode(tape[ptr]);
+    else if (c === "[") {
+      if (tape[ptr] === 0) ip = jumps[ip];
+    } else if (c === "]") {
+      if (tape[ptr] !== 0) ip = jumps[ip];
+    }
+    ip++;
+  }
+  if (out) log(out, "ok");
+  else log("(no output)", "out");
+  if (steps >= LIMIT) log("BF step limit", "err");
+  return { ok: true, out };
+}
+
 export async function runLanguageFile(path, opts = {}) {
   const ext = extOf(path);
   const lang = EXT_LANG[ext] || opts.lang;
@@ -283,9 +409,11 @@ export async function runLanguageFile(path, opts = {}) {
   if (["c", "cpp", "rust", "go"].includes(lang)) {
     return runCompiledProject(path, lang, opts);
   }
+  if (lang === "sql" || ext === "sql") return runSql(path, opts);
+  if (lang === "scheme" || ext === "scm" || ext === "ss") return runScheme(path, opts);
+  if (lang === "bf" || ext === "bf" || ext === "b") {
+    const code = (await fs.readFile(path)).text();
+    return runBrainfuck(code, opts);
+  }
   throw new Error("No lang runner for " + (lang || ext));
-}
-
-export function detectLang(path) {
-  return EXT_LANG[extOf(path)] || null;
 }
