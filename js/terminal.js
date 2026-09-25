@@ -2525,41 +2525,103 @@ async function cmdMinecraft(args) {
   const sub = (args[0] || "help").toLowerCase();
 
   if (sub === "help" || sub === "-h") {
-    print("minecraft | mc — Chromebook Minecraft helper");
-    print("  minecraft list              — list versions");
-    print("  minecraft get <id|#|name>   — download HTML to device (blob → Save As)");
-    print("  minecraft open <id|#>       — fetch & open in new tab");
-    print("  minecraft offline           — open built-in offline /mc.html (1.8 better)");
-    print("  minecraft skins             — list skin PNGs");
-    print("  minecraft skin <name>       — download a skin PNG");
-    print("  Tip: recommended id = 1.8-better");
+    print("minecraft | mc — Chromebook Minecraft");
+    print("  Browsers cannot fetch release files (CORS). Use this flow:");
+    print("  1) minecraft get [id]     — starts a normal browser download");
+    print("  2) minecraft import       — pick the downloaded .html → seeds /mc.html");
+    print("  3) minecraft offline      — open /mc.html");
+    print("");
+    print("  minecraft list");
+    print("  minecraft get [id|#]      — browser download (recommended: 1.8-better)");
+    print("  minecraft import          — file picker → /mc.html + open");
+    print("  minecraft load <vfs-path> — use a file already in VFS");
+    print("  minecraft offline         — open cached /mc.html");
+    print("  minecraft open [id]       — try site proxy, else same as get");
+    print("  minecraft skins | skin <name>");
+    print("  Built-in proxy: /__proxy__/ on this site (automatic).");
+    print("  minecraft proxy status|off     — external proxy stays OFF unless you set a custom URL");
+    print("  minecraft proxy set <url>      — optional third-party proxy only");
     return;
   }
 
   if (sub === "list" || sub === "ls") {
-    const rows = mc.listVersions();
-    for (const r of rows) {
+    for (const r of mc.listVersions()) {
       print(
         String(r.n).padStart(2) + ". " + r.id.padEnd(16) + " " + r.label +
           "  (" + r.size + ")" + (r.recommend ? "  ★" : "")
       );
     }
-    print("Use: minecraft get 1.8-better   or   minecraft get 1");
+    print('Next: minecraft get 1.8-better   then   minecraft import');
+    return;
+  }
+
+  if (sub === "proxy") {
+    const a = (args[1] || "status").toLowerCase();
+    if (a === "off" || a === "disable") {
+      mc.setProxyEnabled(false);
+      print("Fetch-proxy OFF — get/open will use browser download + import only", "ok");
+      return;
+    }
+    if (a === "on" || a === "enable") {
+      if (!mc.getFetchProxy()) {
+        print("No external proxy URL set. Built-in /__proxy__/ is always used first.", "out");
+        print("Only set an external one with: minecraft proxy set https://…/$/", "out");
+        return;
+      }
+      mc.setProxyEnabled(true);
+      print("External fetch-proxy ON — " + mc.getFetchProxy(), "ok");
+      return;
+    }
+    if (a === "set") {
+      const url = args.slice(2).join(" ").trim();
+      if (!url) {
+        print("Usage: minecraft proxy set https://your-proxy.pages.dev/$/");
+        return;
+      }
+      print("Proxy set to " + mc.setFetchProxy(url), "ok");
+      return;
+    }
+    if (a === "clear") {
+      mc.setFetchProxy("clear");
+      print("Proxy URL cleared & disabled", "ok");
+      return;
+    }
+    print("proxy enabled: " + mc.isProxyEnabled());
+    print("proxy base: " + (mc.getFetchProxy() || "(none)"));
+    print("Commands: minecraft proxy on|off|status|set <url>|clear");
+    return;
+  }
+
+  if (sub === "import" || sub === "upload" || sub === "seed") {
+    print("Pick the Minecraft .html file you downloaded…", "out");
+    try {
+      const r = await mc.importLocalFile({ open: true });
+      print("Seeded /mc.html (" + Math.round(r.size / 1048576) + " MB) and opened", "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
+    return;
+  }
+
+  if (sub === "load") {
+    const path = args[1];
+    if (!path) {
+      print("Usage: minecraft load /minecraft/game.html", "err");
+      return;
+    }
+    try {
+      const r = await mc.loadFromVfs(path.startsWith("/") ? path : "/" + path);
+      print("Loaded " + path + " → /mc.html (" + Math.round(r.size / 1048576) + " MB)", "ok");
+    } catch (e) {
+      print(String(e.message || e), "err");
+    }
     return;
   }
 
   if (sub === "offline" || sub === "play") {
-    print("Opening offline Minecraft (/mc.html)…", "ok");
-    mc.openOfflineMc();
-    return;
-  }
-
-  if (sub === "open") {
-    const key = args.slice(1).join(" ") || "1.8-better";
-    print("Fetching " + key + "…", "out");
+    print("Opening same-origin /mc.html (not about:blank)…", "ok");
     try {
-      const r = await mc.openMcInTab(key);
-      print("Opened " + r.filename, "ok");
+      mc.openOfflineMc();
     } catch (e) {
       print(String(e.message || e), "err");
     }
@@ -2568,54 +2630,78 @@ async function cmdMinecraft(args) {
 
   if (sub === "get" || sub === "download" || sub === "dl") {
     const key = args.slice(1).join(" ") || "1.8-better";
-    print("Downloading " + key + " (large files may take a minute)…", "out");
+    print("Getting " + key + "…", "out");
     try {
       const r = await mc.fetchMcAsset("game", key, (m) => print(m, "out"));
       mc.downloadBlob(r.blob, r.filename);
-      print("Saved download: " + r.filename + " (" + Math.round(r.size / 1048576) + " MB)", "ok");
-      print("Blob URL (session): " + r.blobUrl, "out");
+      print("Saved " + r.filename + " (" + Math.round(r.size / 1048576) + " MB) via " + r.method, "ok");
+      if (r.method === "user-proxy" || r.method === "site-proxy" || r.method === "sw-cache") {
+        print("/mc.html seeded — use: minecraft offline (no more proxy bandwidth)", "ok");
+      }
     } catch (e) {
-      print(String(e.message || e), "err");
+      if (e && e.code === "NEED_IMPORT") {
+        print(e.message, "out");
+        print("After the file lands in Downloads → minecraft import", "ok");
+      } else {
+        print(String(e.message || e), "err");
+      }
+    }
+    return;
+  }
+
+  if (sub === "open") {
+    const key = args.slice(1).join(" ") || "1.8-better";
+    print("Trying open " + key + "…", "out");
+    try {
+      const r = await mc.openMcInTab(key);
+      print("Opened " + r.filename + " via " + (r.method || "blob"), "ok");
+    } catch (e) {
+      if (e && e.code === "NEED_IMPORT") {
+        print(e.message, "out");
+        print("Run: minecraft import", "ok");
+      } else {
+        print(String(e.message || e), "err");
+        print("Fallback: minecraft get " + key + "  then  minecraft import", "out");
+      }
     }
     return;
   }
 
   if (sub === "skins") {
     mc.listSkins().forEach((s, i) => print(String(i + 1).padStart(2) + ". " + s));
-    print("Use: minecraft skin <filename-fragment>");
+    print("Skins: use browser download from the skins release, or minecraft skin <name>");
     return;
   }
 
   if (sub === "skin") {
     const key = args.slice(1).join(" ");
     if (!key) {
-      print("Usage: minecraft skin <name>");
+      print("Usage: minecraft skin <name-fragment>");
       return;
     }
-    try {
-      const r = await mc.fetchMcAsset("skin", key, (m) => print(m, "out"));
-      mc.downloadBlob(r.blob, r.filename);
-      print("Downloaded skin: " + r.filename, "ok");
-    } catch (e) {
-      print(String(e.message || e), "err");
-    }
+    const name = mc.listSkins().find((s) => s.includes(key)) || key;
+    print("Starting skin download…", "out");
+    mc.browserDownload("minecraft_skins", name.endsWith(".png") ? name : name + ".png");
     return;
   }
 
-  // bare: minecraft 1.8-better
+  // bare id
   if (sub && sub !== "help") {
-    print("Downloading " + sub + "…", "out");
+    print("Starting browser download…", "out");
     try {
-      const r = await mc.fetchMcAsset("game", args.join(" ") || sub, (m) => print(m, "out"));
-      mc.downloadBlob(r.blob, r.filename);
-      print("Saved: " + r.filename, "ok");
+      const versions = (await import("./minecraft.js")).MC_VERSIONS;
+      const ver =
+        versions.find((x) => x.id === sub || x.id.includes(sub)) ||
+        versions[Number(sub) - 1] ||
+        versions.find((x) => x.recommend);
+      mc.browserDownload("MINECRAFT", ver.file);
+      print("Then run: minecraft import", "ok");
     } catch (e) {
       print(String(e.message || e), "err");
-      print('Try: minecraft list', "out");
     }
-    return;
   }
 }
+
 
 async function cmdN3xnChat() {
   print("Opening n3xn chat (/n3xn-chat.html)…", "ok");
