@@ -19,7 +19,6 @@
     "/mc.html",
     "/n3xn-chat.html",
     "/github-assets/*",
-    "/mc-source.html",
-    "/__proxy__/*"
+    "/mc-source.html"
   ]
 }
