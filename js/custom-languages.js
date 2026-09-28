@@ -1,4 +1,3 @@
-
 /**
  * Load Monaco Monarch language defs from /n3xn-lang-highlights.js
  * Expected export shapes (any one):
@@ -52,9 +51,10 @@ function normalizeDef(raw) {
 async function fetchModuleDefs() {
   // ES module (preferred)
   try {
+    // Stable URL so SW can serve offline (no cache-bust query)
     const mod = await import(
       /* @vite-ignore */
-      "/n3xn-lang-highlights.js?t=" + Date.now()
+      "/n3xn-lang-highlights.js"
     );
     const arr =
       mod.default ||
@@ -72,7 +72,7 @@ async function fetchModuleDefs() {
   try {
     await new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = "/n3xn-lang-highlights.js?t=" + Date.now();
+      s.src = "/n3xn-lang-highlights.js";
       s.async = true;
       s.onload = () => resolve();
       s.onerror = () => reject(new Error("script load failed"));
