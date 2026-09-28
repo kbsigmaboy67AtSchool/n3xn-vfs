@@ -1,18 +1,15 @@
-/* n3xn VFS SW v8 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, V0RT3X) */
-const SHELL = "n3xn-shell-v12";
-const MONACO = "n3xn-monaco-v5";
+/* n3xn VFS SW v13 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, V0RT3X) */
+const SHELL = "n3xn-shell-v13";
+const MONACO = "n3xn-monaco-v4";
 const PYODIDE_CACHE = "n3xn-pyodide-v1";
 const CDN_CACHE = "n3xn-cdn-v2";
-
 const PREFIX = "/__monaco__/";
 const PY_PREFIX = "/__pyodide__/";
 const CDN_PREFIX = "/__cdn__/";
-
 const CDN = "https://cdn.jsdelivr.net/";
 const VER = "monaco-editor@0.52.0";
 const PY_VER = "v0.26.2";
 const PY_CDN = "https://cdn.jsdelivr.net/pyodide/" + PY_VER + "/full/";
-
 const VORTEX_GITHUB_URL =
   "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
 
@@ -22,14 +19,14 @@ const MC_OFFLINE_URL = (() => {
   const user = ["kbsigmaboy", "67AtSchool"].join("");
   return "https://" + host + "/" + user + "/minecraft/releases/download/MINECRAFT/" + MC_OFFLINE_FILE;
 })();
-
 const N3XN_CHAT_SRC = (() => {
+  // preferred path after rename; fallback to V0RT3X jsdelivr
   return "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
 })();
 
 const FLAGS_URL = self.location.origin + "/__n3xn_sw_flags__";
 
-/* Offline ON by default — first install warms packs */
+/* Offline ON by default — first install warms packs (can be large) */
 let offlinePyodide = true;
 let offlineReact = true;
 let offlineCdn = true;
@@ -40,123 +37,74 @@ const SHELL_URLS = [
   "./V0RT3X_chat.html",
   "./n3xn-chat.html",
   "./manifest.webmanifest",
+  "./n3xn-lang-highlights.js",
   "./css/theme.css",
   "./css/app.css",
   "./css/devtools.css",
-  "./js/app.js",
-  "./js/db.js",
-  "./js/crypto.js",
-  "./js/fs.js",
-  "./js/editor.js",
-  "./js/terminal.js",
-  "./js/runner.js",
-  "./js/python.js",
-  "./js/react-runner.js",
-  "./js/lang-runner.js",
-  "./js/n3xn-devtools.js",
   "./devtools.js",
   "./devtools.css",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
+  "./js/app.js",
+  "./js/chat.js",
+  "./js/collab.js",
+  "./js/crypto.js",
+  "./js/custom-languages.js",
+  "./js/db.js",
+  "./js/editor.js",
+  "./js/fs.js",
+  "./js/game-runner.js",
+  "./js/github.js",
+  "./js/html-visual.js",
+  "./js/lang-runner.js",
+  "./js/media-editor.js",
+  "./js/minecraft.js",
+  "./js/monaco-settings.js",
+  "./js/n3-site.js",
+  "./js/n3xn-config.js",
+  "./js/n3xn-devtools.js",
+  "./js/nexc.js",
+  "./js/nmath.js",
+  "./js/performance.js",
+  "./js/python.js",
+  "./js/react-runner.js",
+  "./js/runner.js",
+  "./js/storage-backends.js",
+  "./js/terminal.js",
+  "./js/vfs-picker.js",
+  "./js/xdebug.js",
 ];
 
 const MONACO_CORE = [
-  // Core Loader & Main Editor
   "npm/" + VER + "/min/vs/loader.js",
   "npm/" + VER + "/min/vs/editor/editor.main.js",
   "npm/" + VER + "/min/vs/editor/editor.main.css",
   "npm/" + VER + "/min/vs/editor/editor.main.nls.js",
   "npm/" + VER + "/min/vs/base/worker/workerMain.js",
-
-  // Core UI Font & Base Worker (Fixes icons & fallback worker services)
-  "npm/" + VER + "/min/vs/base/browser/ui/codicons/codicon/codicon.ttf",
-  "npm/" + VER + "/min/vs/editor/editor.worker.js",
-
-  // Language Workers
   "npm/" + VER + "/min/vs/language/html/htmlWorker.js",
   "npm/" + VER + "/min/vs/language/css/cssWorker.js",
   "npm/" + VER + "/min/vs/language/json/jsonWorker.js",
   "npm/" + VER + "/min/vs/language/typescript/tsWorker.js",
-
-  // Full Monaco Basic Language Suite
-  "npm/" + VER + "/min/vs/basic-languages/abap/abap.js",
-  "npm/" + VER + "/min/vs/basic-languages/apex/apex.js",
-  "npm/" + VER + "/min/vs/basic-languages/azcli/azcli.js",
-  "npm/" + VER + "/min/vs/basic-languages/bat/bat.js",
-  "npm/" + VER + "/min/vs/basic-languages/bicep/bicep.js",
-  "npm/" + VER + "/min/vs/basic-languages/cameligo/cameligo.js",
-  "npm/" + VER + "/min/vs/basic-languages/clojure/clojure.js",
-  "npm/" + VER + "/min/vs/basic-languages/coffeescript/coffeescript.js",
+  "npm/" + VER + "/min/vs/basic-languages/javascript/javascript.js",
+  "npm/" + VER + "/min/vs/basic-languages/typescript/typescript.js",
+  "npm/" + VER + "/min/vs/basic-languages/html/html.js",
+  "npm/" + VER + "/min/vs/basic-languages/css/css.js",
+  "npm/" + VER + "/min/vs/basic-languages/scss/scss.js",
+  "npm/" + VER + "/min/vs/basic-languages/json/json.js",
+  "npm/" + VER + "/min/vs/basic-languages/python/python.js",
+  "npm/" + VER + "/min/vs/basic-languages/markdown/markdown.js",
+  "npm/" + VER + "/min/vs/basic-languages/shell/shell.js",
   "npm/" + VER + "/min/vs/basic-languages/cpp/cpp.js",
   "npm/" + VER + "/min/vs/basic-languages/csharp/csharp.js",
-  "npm/" + VER + "/min/vs/basic-languages/csp/csp.js",
-  "npm/" + VER + "/min/vs/basic-languages/css/css.js",
-  "npm/" + VER + "/min/vs/basic-languages/cypher/cypher.js",
-  "npm/" + VER + "/min/vs/basic-languages/dart/dart.js",
-  "npm/" + VER + "/min/vs/basic-languages/dockerfile/dockerfile.js",
-  "npm/" + VER + "/min/vs/basic-languages/ecl/ecl.js",
-  "npm/" + VER + "/min/vs/basic-languages/elixir/elixir.js",
-  "npm/" + VER + "/min/vs/basic-languages/flow9/flow9.js",
-  "npm/" + VER + "/min/vs/basic-languages/freemarker2/freemarker2.js",
-  "npm/" + VER + "/min/vs/basic-languages/fsharp/fsharp.js",
-  "npm/" + VER + "/min/vs/basic-languages/go/go.js",
-  "npm/" + VER + "/min/vs/basic-languages/graphql/graphql.js",
-  "npm/" + VER + "/min/vs/basic-languages/handlebars/handlebars.js",
-  "npm/" + VER + "/min/vs/basic-languages/hcl/hcl.js",
-  "npm/" + VER + "/min/vs/basic-languages/html/html.js",
-  "npm/" + VER + "/min/vs/basic-languages/ini/ini.js",
   "npm/" + VER + "/min/vs/basic-languages/java/java.js",
-  "npm/" + VER + "/min/vs/basic-languages/javascript/javascript.js",
-  "npm/" + VER + "/min/vs/basic-languages/julia/julia.js",
-  "npm/" + VER + "/min/vs/basic-languages/kotlin/kotlin.js",
-  "npm/" + VER + "/min/vs/basic-languages/less/less.js",
-  "npm/" + VER + "/min/vs/basic-languages/lexon/lexon.js",
-  "npm/" + VER + "/min/vs/basic-languages/liquid/liquid.js",
-  "npm/" + VER + "/min/vs/basic-languages/lua/lua.js",
-  "npm/" + VER + "/min/vs/basic-languages/m3/m3.js",
-  "npm/" + VER + "/min/vs/basic-languages/markdown/markdown.js",
-  "npm/" + VER + "/min/vs/basic-languages/mips/mips.js",
-  "npm/" + VER + "/min/vs/basic-languages/msdax/msdax.js",
-  "npm/" + VER + "/min/vs/basic-languages/mysql/mysql.js",
-  "npm/" + VER + "/min/vs/basic-languages/objective-c/objective-c.js",
-  "npm/" + VER + "/min/vs/basic-languages/pascal/pascal.js",
-  "npm/" + VER + "/min/vs/basic-languages/pascaligo/pascaligo.js",
-  "npm/" + VER + "/min/vs/basic-languages/perl/perl.js",
-  "npm/" + VER + "/min/vs/basic-languages/pgsql/pgsql.js",
-  "npm/" + VER + "/min/vs/basic-languages/php/php.js",
-  "npm/" + VER + "/min/vs/basic-languages/pla/pla.js",
-  "npm/" + VER + "/min/vs/basic-languages/postiats/postiats.js",
-  "npm/" + VER + "/min/vs/basic-languages/powerquery/powerquery.js",
-  "npm/" + VER + "/min/vs/basic-languages/powershell/powershell.js",
-  "npm/" + VER + "/min/vs/basic-languages/protobuf/protobuf.js",
-  "npm/" + VER + "/min/vs/basic-languages/pug/pug.js",
-  "npm/" + VER + "/min/vs/basic-languages/python/python.js",
-  "npm/" + VER + "/min/vs/basic-languages/qsharp/qsharp.js",
-  "npm/" + VER + "/min/vs/basic-languages/r/r.js",
-  "npm/" + VER + "/min/vs/basic-languages/razor/razor.js",
-  "npm/" + VER + "/min/vs/basic-languages/redis/redis.js",
-  "npm/" + VER + "/min/vs/basic-languages/redshift/redshift.js",
-  "npm/" + VER + "/min/vs/basic-languages/reststructuredtext/reststructuredtext.js",
-  "npm/" + VER + "/min/vs/basic-languages/ruby/ruby.js",
+  "npm/" + VER + "/min/vs/basic-languages/go/go.js",
   "npm/" + VER + "/min/vs/basic-languages/rust/rust.js",
-  "npm/" + VER + "/min/vs/basic-languages/sb/sb.js",
-  "npm/" + VER + "/min/vs/basic-languages/scala/scala.js",
-  "npm/" + VER + "/min/vs/basic-languages/scheme/scheme.js",
-  "npm/" + VER + "/min/vs/basic-languages/scss/scss.js",
-  "npm/" + VER + "/min/vs/basic-languages/shell/shell.js",
-  "npm/" + VER + "/min/vs/basic-languages/sol/sol.js",
-  "npm/" + VER + "/min/vs/basic-languages/sparql/sparql.js",
-  "npm/" + VER + "/min/vs/basic-languages/sql/sql.js",
-  "npm/" + VER + "/min/vs/basic-languages/st/st.js",
-  "npm/" + VER + "/min/vs/basic-languages/swift/swift.js",
-  "npm/" + VER + "/min/vs/basic-languages/systemverilog/systemverilog.js",
-  "npm/" + VER + "/min/vs/basic-languages/tcl/tcl.js",
-  "npm/" + VER + "/min/vs/basic-languages/twig/twig.js",
-  "npm/" + VER + "/min/vs/basic-languages/typescript/typescript.js",
-  "npm/" + VER + "/min/vs/basic-languages/vb/vb.js",
-  "npm/" + VER + "/min/vs/basic-languages/wgsl/wgsl.js",
+  "npm/" + VER + "/min/vs/basic-languages/lua/lua.js",
+  "npm/" + VER + "/min/vs/basic-languages/php/php.js",
   "npm/" + VER + "/min/vs/basic-languages/xml/xml.js",
-  "npm/" + VER + "/min/vs/basic-languages/yaml/yaml.js"
+  "npm/" + VER + "/min/vs/basic-languages/yaml/yaml.js",
+  "npm/" + VER + "/min/vs/basic-languages/sql/sql.js",
+  "npm/" + VER + "/min/vs/basic-languages/dockerfile/dockerfile.js",
 ];
 
 const PYODIDE_CORE = [
@@ -173,7 +121,6 @@ const EXTERNAL_CORE = [
   "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
   "https://cdn.jsdelivr.net/npm/@babel/standalone@7.26.5/babel.min.js",
   "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/index.js",
-  "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/dist/glue.wasm",
   "https://cdn.jsdelivr.net/npm/wasmoon@1.16.0/+esm",
   "https://esm.sh/react@18.3.1",
   "https://esm.sh/react-dom@18.3.1/client",
@@ -206,6 +153,7 @@ self.addEventListener("install", (event) => {
       await warmN3xnChat();
       await warmMinecraftOffline();
       await warmExternal();
+      // Pyodide last (largest) — still default on
       await warmPyodide();
       await self.skipWaiting();
     })()
@@ -308,6 +256,7 @@ async function warmMonaco() {
   );
 }
 
+
 async function warmMinecraftOffline() {
   const cache = await caches.open(SHELL);
   const candidates = [
@@ -315,12 +264,13 @@ async function warmMinecraftOffline() {
     self.location.origin + "/mc-source.html",
   ];
   try { candidates.push(MC_OFFLINE_URL); } catch (_) {}
+
   for (const url of candidates) {
     try {
       const res = await fetch(url, { credentials: "omit", redirect: "follow" });
       if (!res.ok) continue;
       const buf = await res.arrayBuffer();
-      if (buf.byteLength < 1000000) continue;
+      if (buf.byteLength < 1000000) continue; // reject SPA / tip pages
       const sample = new TextDecoder().decode(buf.slice(0, 4000)).toLowerCase();
       if (sample.includes("n3xn virtual") || sample.includes("minecraft not cached")) continue;
       const html = new Response(buf, {
@@ -339,11 +289,70 @@ async function warmMinecraftOffline() {
       console.warn("[n3xn sw] mc try", String(err && err.message || err).slice(0, 100));
     }
   }
-  const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft setup</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;background:#0a0a0f;color:#e2e8f0;padding:1.5rem;line-height:1.5}.box{max-width:420px;border:1px solid #334155;border-radius:12px;padding:1.5rem;background:#0d1117}h1{margin:0 0 .5rem;font-size:1.25rem;color:#00f3ff}p{margin:.5rem 0;color:#94a3b8;font-size:.9rem}code{background:#1e293b;padding:2px 6px;border-radius:4px;font-size:.8rem}button,label.btn{display:inline-block;margin-top:.75rem;padding:.65rem 1rem;border:0;border-radius:8px;background:#00f3ff;color:#000;font-weight:700;cursor:pointer;font-size:.9rem}button.secondary{background:#1e293b;color:#e2e8f0;margin-left:.5rem}#status{margin-top:1rem;font-size:.85rem;color:#a5f3fc;white-space:pre-wrap}</style></head><body><div class="box"><h1>Minecraft not cached yet</h1><p>Browsers cannot auto-fetch the release (CORS). Do this once:</p><p><strong>1.</strong> Download the HTML (Chrome / Files app).<br><strong>2.</strong> Import it below — seeds <code>/mc.html</code> on this device.</p><label class="btn"><input type="file" id="f" accept=".html,text/html" hidden>Import Minecraft .html</label><button type="button" class="secondary" id="reload">Retry open</button><p style="margin-top:1rem">Or in n3xn terminal: <code>minecraft get 1.8-better</code> then <code>minecraft import</code></p><div id="status"></div><script>const status = document.getElementById("status");function log(m){ status.textContent = m; }document.getElementById("f").onchange = async (e) => {  const file = e.target.files && e.target.files[0];  if (!file) return;  log("Reading " + file.name + "…");  try {    const buf = await file.arrayBuffer();    if (buf.byteLength < 500000) throw new Error("File too small (" + buf.byteLength + " bytes) — pick the full game HTML");    const names = ["n3xn-shell-v12","n3xn-shell-v11","n3xn-shell-v10","n3xn-shell-v9","n3xn-shell-v8"];    for (const name of names) {      try {        const cache = await caches.open(name);        const res = new Response(buf.slice(0), {          status: 200,          headers: {            "Content-Type": "text/html; charset=utf-8",            "X-N3xn-Mc": "1",            "Cache-Control": "public, max-age=31536000"          }        });        await cache.put(location.origin + "/mc.html", res.clone());        await cache.put("/mc.html", res.clone());      } catch (err) { console.warn(err); }    }    log("Cached " + Math.round(buf.byteLength/1048576) + " MB. Reloading…");    location.reload();  } catch (err) {    log(String(err.message || err));  }};;document.getElementById("reload").onclick = () => location.reload();</script></div></body></html>`;
+
+  const tip = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Minecraft setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+body{margin:0;min-height:100vh;display:grid;place-items:center;font-family:system-ui,sans-serif;
+background:#0a0a0f;color:#e2e8f0;padding:1.5rem;line-height:1.5}
+.box{max-width:420px;border:1px solid #334155;border-radius:12px;padding:1.5rem;background:#0d1117}
+h1{margin:0 0 .5rem;font-size:1.25rem;color:#00f3ff}
+p{margin:.5rem 0;color:#94a3b8;font-size:.9rem}
+code{background:#1e293b;padding:2px 6px;border-radius:4px;font-size:.8rem}
+button,label.btn{display:inline-block;margin-top:.75rem;padding:.65rem 1rem;border:0;border-radius:8px;
+background:#00f3ff;color:#000;font-weight:700;cursor:pointer;font-size:.9rem}
+button.secondary{background:#1e293b;color:#e2e8f0;margin-left:.5rem}
+#status{margin-top:1rem;font-size:.85rem;color:#a5f3fc;white-space:pre-wrap}
+</style></head><body><div class="box">
+<h1>Minecraft not cached yet</h1>
+<p>Browsers cannot auto-fetch the release (CORS). Do this once:</p>
+<p><strong>1.</strong> Download the HTML (Chrome / Files app).<br>
+<strong>2.</strong> Import it below — seeds <code>/mc.html</code> on this device.</p>
+<label class="btn"><input type="file" id="f" accept=".html,text/html" hidden>Import Minecraft .html</label>
+<button type="button" class="secondary" id="reload">Retry open</button>
+<p style="margin-top:1rem">Or in n3xn terminal: <code>minecraft get 1.8-better</code> then <code>minecraft import</code></p>
+<div id="status"></div>
+<script>
+const status = document.getElementById("status");
+function log(m){ status.textContent = m; }
+document.getElementById("f").onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  log("Reading " + file.name + "…");
+  try {
+    const buf = await file.arrayBuffer();
+    if (buf.byteLength < 500000) throw new Error("File too small (" + buf.byteLength + " bytes) — pick the full game HTML");
+    const names = ["n3xn-shell-v11","n3xn-shell-v10","n3xn-shell-v9","n3xn-shell-v8"];
+    for (const name of names) {
+      try {
+        const cache = await caches.open(name);
+        const res = new Response(buf.slice(0), {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "X-N3xn-Mc": "1",
+            "Cache-Control": "public, max-age=31536000"
+          }
+        });
+        await cache.put(location.origin + "/mc.html", res.clone());
+        await cache.put("/mc.html", res.clone());
+      } catch (err) { console.warn(err); }
+    }
+    log("Cached " + Math.round(buf.byteLength/1048576) + " MB. Reloading…");
+    location.reload();
+  } catch (err) {
+    log(String(err.message || err));
+  }
+};
+document.getElementById("reload").onclick = () => location.reload();
+</script>
+</div></body></html>`;
+
   const html = new Response(tip, {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "X-N3xn-Mc": "0" },
   });
+  // Only store tip if no real game cached
   const existing = await cache.match("/mc.html");
   if (existing) {
     const x = existing.headers.get("X-N3xn-Mc");
@@ -415,6 +424,7 @@ async function warmExternal() {
       const buf = await res.arrayBuffer();
       const ct = res.headers.get("Content-Type") || mimeFor(u);
       await putBoth(cache, u, null, buf, ct);
+      // proxy mirror
       let proxied = null;
       if (u.startsWith("https://cdn.jsdelivr.net/"))
         proxied = self.location.origin + CDN_PREFIX + "jsdelivr/" + u.slice("https://cdn.jsdelivr.net/".length);
@@ -443,6 +453,7 @@ self.addEventListener("fetch", (event) => {
         if (hit) {
           try {
             const buf = await hit.clone().arrayBuffer();
+            // Drop poisoned SPA cache entries
             if (buf.byteLength < 500000) {
               const sample = new TextDecoder().decode(buf.slice(0, 1500)).toLowerCase();
               if (sample.includes("n3xn virtual") || sample.includes("<div id=\"app\"")) {
@@ -473,7 +484,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Proxy path: let network handle /github-assets
+  // Proxy path: let network handle /github-assets (CF _redirects); do not rewrite to index
   if (url.origin === self.location.origin && url.pathname.startsWith("/github-assets/")) {
     event.respondWith(
       fetch(req).catch(
@@ -505,6 +516,54 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
+
+
+    // Custom Monaco lang defs — stable URL, no SPA fallback
+    if (
+      url.origin === self.location.origin &&
+      (url.pathname === "/n3xn-lang-highlights.js" ||
+        url.pathname.endsWith("/n3xn-lang-highlights.js"))
+    ) {
+      event.respondWith(
+        (async () => {
+          const cache = await caches.open(SHELL);
+          const keys = [
+            req,
+            url.pathname,
+            "./n3xn-lang-highlights.js",
+            self.location.origin + "/n3xn-lang-highlights.js",
+          ];
+          for (const k of keys) {
+            const hit = await cache.match(k);
+            if (hit) {
+              const ct = (hit.headers.get("Content-Type") || "").toLowerCase();
+              if (!ct.includes("text/html")) return hit;
+            }
+          }
+          try {
+            const net = await fetch(req);
+            if (net.ok) {
+              const buf = await net.arrayBuffer();
+              const out = new Response(buf, {
+                status: 200,
+                headers: {
+                  "Content-Type": "application/javascript; charset=utf-8",
+                  "Cache-Control": "no-cache",
+                },
+              });
+              await cache.put("./n3xn-lang-highlights.js", out.clone());
+              await cache.put(self.location.origin + "/n3xn-lang-highlights.js", out.clone());
+              return out;
+            }
+          } catch (_) {}
+          return new Response("/* n3xn-lang-highlights.js offline miss */\nexport default [];\n", {
+            status: 200,
+            headers: { "Content-Type": "application/javascript; charset=utf-8" },
+          });
+        })()
+      );
+      return;
+    }
 
   // Monaco proxy
   if (url.origin === self.location.origin && url.pathname.startsWith(PREFIX)) {
@@ -584,10 +643,53 @@ self.addEventListener("fetch", (event) => {
         }
         return net;
       } catch {
-        const hit = await cache.match(req);
-        if (hit) return hit;
-        if (isAsset || req.destination === "image" || req.destination === "font") {
-          return new Response("", { status: 404 });
+        const candidates = [
+          req,
+          url.pathname,
+          "." + url.pathname,
+          "./" + url.pathname.replace(/^\//, ""),
+          self.location.origin + url.pathname,
+        ];
+        let hit = null;
+        for (const k of candidates) {
+          hit = await cache.match(k);
+          if (hit) break;
+        }
+        if (hit) {
+          const hct = (hit.headers.get("Content-Type") || "").toLowerCase();
+          if (
+            (isAsset || /\.m?js$/i.test(url.pathname)) &&
+            hct.includes("text/html")
+          ) {
+            return new Response(
+              "/* offline: blocked html fallback for " + url.pathname + " */",
+              {
+                status: 404,
+                headers: { "Content-Type": "application/javascript; charset=utf-8" },
+              }
+            );
+          }
+          return hit;
+        }
+        if (
+          isAsset ||
+          req.destination === "image" ||
+          req.destination === "font" ||
+          req.destination === "script" ||
+          /\.(m?js|css|wasm|json)$/i.test(url.pathname)
+        ) {
+          const isJs = /\.m?js$/i.test(url.pathname);
+          return new Response(
+            isJs ? "/* offline miss: " + url.pathname + " */" : "",
+            {
+              status: 404,
+              headers: {
+                "Content-Type": isJs
+                  ? "application/javascript; charset=utf-8"
+                  : "text/plain; charset=utf-8",
+              },
+            }
+          );
         }
         return (await cache.match("./index.html")) || new Response("offline", { status: 503 });
       }
@@ -709,6 +811,7 @@ self.addEventListener("message", (event) => {
   if (event.data === "SKIP_WAITING") self.skipWaiting();
   const data = event.data;
   if (!data || typeof data !== "object") return;
+
   if (data.type === "WARM_MONACO") event.waitUntil(warmMonaco());
   if (data.type === "WARM_PYODIDE") {
     offlinePyodide = true;
@@ -723,14 +826,7 @@ self.addEventListener("message", (event) => {
     offlinePyodide = offlineReact = offlineCdn = true;
     event.waitUntil(
       saveFlags().then(() =>
-        Promise.all([
-          warmMonaco(),
-          warmPyodide(),
-          warmExternal(),
-          warmVortexChat(),
-          warmN3xnChat(),
-          warmMinecraftOffline(),
-        ])
+        Promise.all([warmMonaco(), warmPyodide(), warmExternal(), warmVortexChat(), warmN3xnChat(), warmMinecraftOffline()])
       )
     );
   }
