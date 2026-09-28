@@ -21,7 +21,7 @@ const MC_OFFLINE_URL = (() => {
 })();
 const N3XN_CHAT_SRC = (() => {
   // preferred path after rename; fallback to V0RT3X jsdelivr
-  return "https://cdn.jsdelivr.net/gh/kbsigmaboy67AtSchool/V0RT3X-C0D3S@main/index.html";
+  return "https://kbsigmaboy67atschool.github.io/V0RT3X-C0D3S/index.html";
 })();
 
 const FLAGS_URL = self.location.origin + "/__n3xn_sw_flags__";
