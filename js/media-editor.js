@@ -1,18 +1,19 @@
 /**
- * n3xn VFS v4 — Unified Multi-Media Studio
- * Complete production editor supporting Images, SVGs, GIFs, Video, & Audio.
+ * n3xn DigiArt Studios v5 — Unified Multi-Media & Vector Studio
+ * Complete production studio supporting SVG Vector (Default), Digital Art,
+ * Image/Meme, GIF Animation, Video Studio, & Web Audio Workbench.
  */
 import * as fs from "./fs.js";
 
 let panel = null;
-let currentMode = "image"; // 'image' | 'svg' | 'gif' | 'video' | 'audio'
+let currentMode = "svg"; // 'svg' (default) | 'image' | 'gif' | 'video' | 'audio'
 let sourcePath = null;
 
 // Canvas & Image Contexts
 let canvas = null;
 let ctx = null;
 let baseImage = null;
-let layers = [];
+let layers = []; // Vector & Raster Layer Stack
 let selectedLayerIndex = -1;
 let rotation = 0;
 let activeTool = "select";
@@ -27,7 +28,6 @@ let snapshot = null;
 let audioCtx = null;
 let audioBuffer = null;
 let audioSourceNode = null;
-let audioSelection = { start: 0, end: 0 };
 let isAudioPlaying = false;
 
 // Video State
@@ -59,7 +59,7 @@ export function openMediaEditor(path, modeHint) {
   if (path) {
     autoDetectAndLoad(path, modeHint);
   } else {
-    switchMode(modeHint || "image");
+    switchMode(modeHint || "svg");
   }
 }
 
@@ -83,12 +83,12 @@ function ensurePanel() {
     <div class="studio-header">
       <div class="studio-brand">
         <span class="studio-logo">❖ n3xn</span>
-        <span class="studio-title">Media Studio v4</span>
+        <span class="studio-title">DigiArt Studios v5</span>
       </div>
 
       <div class="studio-mode-tabs">
-        <button type="button" class="tab-btn active" data-mode="image">🖼️ Image & Meme</button>
-        <button type="button" class="tab-btn" data-mode="svg">📐 SVG Vector</button>
+        <button type="button" class="tab-btn active" data-mode="svg">📐 SVG DigiArt Studio</button>
+        <button type="button" class="tab-btn" data-mode="image">🖼️ Image & Meme</button>
         <button type="button" class="tab-btn" data-mode="gif">🎞️ GIF Animator</button>
         <button type="button" class="tab-btn" data-mode="video">🎥 Video Studio</button>
         <button type="button" class="tab-btn" data-mode="audio">🔊 Audio Workbench</button>
@@ -124,7 +124,7 @@ function ensurePanel() {
     <!-- Timeline & Playback Status Bar -->
     <div class="studio-statusbar" id="studio-statusbar">
       <span id="st-status-msg">Ready</span>
-      <span id="st-status-info">800 x 600 px</span>
+      <span id="st-status-info">800 x 600 px | SVG Vector Primary Mode</span>
     </div>
   `;
 
@@ -189,12 +189,12 @@ function showPanel() {
 async function autoDetectAndLoad(path) {
   const ext = path.split(".").pop().toLowerCase();
 
-  if (["png", "jpg", "jpeg", "webp", "bmp"].includes(ext)) {
-    switchMode("image");
-    await loadImageFromVfs(path);
-  } else if (ext === "svg") {
+  if (ext === "svg") {
     switchMode("svg");
     await loadSvgFromVfs(path);
+  } else if (["png", "jpg", "jpeg", "webp", "bmp"].includes(ext)) {
+    switchMode("image");
+    await loadImageFromVfs(path);
   } else if (ext === "gif") {
     switchMode("gif");
     await loadGifFromVfs(path);
@@ -205,7 +205,7 @@ async function autoDetectAndLoad(path) {
     switchMode("audio");
     await loadAudioFromVfs(path);
   } else {
-    switchMode("image");
+    switchMode("svg");
   }
 }
 
@@ -219,7 +219,7 @@ function getCanvasCoords(e) {
   const scaleY = canvas.height / rect.height;
   return {
     x: (e.clientX - rect.left) * scaleX,
-    y: (e.clientY - rect.top) * scaleY
+    y: (e.clientY - rect.top) * scaleY,
   };
 }
 
@@ -228,7 +228,7 @@ function getBrushSettings() {
   const sizeEl = panel.querySelector("#insp-size");
   return {
     color: colorEl ? colorEl.value : "#00f3ff",
-    size: sizeEl ? Number(sizeEl.value) : 4
+    size: sizeEl ? Number(sizeEl.value) : 4,
   };
 }
 
@@ -301,6 +301,20 @@ function handlePointerUp(e) {
   if (!isDrawing) return;
   isDrawing = false;
   ctx.globalAlpha = 1.0;
+
+  // Save to layer if vector mode
+  if (currentMode === "svg") {
+    const { color, size } = getBrushSettings();
+    layers.push({
+      type: activeTool,
+      x: startX,
+      y: startY,
+      color,
+      size,
+      svgCode: `<path d="M ${startX} ${startY} L ${e.clientX} ${e.clientY}" stroke="${color}" stroke-width="${size}" fill="none"/>`
+    });
+  }
+
   saveHistory();
 }
 
@@ -329,7 +343,194 @@ function drawArrow(fromX, fromY, toX, toY, size) {
 }
 
 /* ==========================================================================
-   1. IMAGE & MEME ENGINE (20 TOOLS)
+   1. n3xn DigiArt SVG VECTOR STUDIO (DEFAULT) & CONVERTER
+   ========================================================================== */
+
+function buildSvgToolbar() {
+  return `
+    <div class="tool-group">
+      <span class="tool-title">Vector Shapes & Art</span>
+      <button class="tool-btn ${activeTool === "select" ? "active" : ""}" id="tool-select">🎯 Select</button>
+      <button class="tool-btn" id="svg-add-rect">🟩 Add Rect</button>
+      <button class="tool-btn" id="svg-add-circle">🔴 Add Circle</button>
+      <button class="tool-btn" id="svg-add-star">⭐ Add Star</button>
+      <button class="tool-btn" id="svg-add-text">🔤 Vector Text</button>
+      <button class="tool-btn" id="svg-paste-code">📝 Raw SVG Code</button>
+    </div>
+
+    <div class="tool-group">
+      <span class="tool-title">Vector ↔ Raster Converters</span>
+      <button class="tool-btn primary" id="conv-svg-to-png">🔄 SVG ➔ PNG</button>
+      <button class="tool-btn primary" id="conv-svg-to-jpg">🔄 SVG ➔ JPG</button>
+      <button class="tool-btn primary" id="conv-img-to-svg">⚡ Image ➔ SVG (Trace)</button>
+    </div>
+
+    <div class="tool-group">
+      <span class="tool-title">Vector Operations</span>
+      <button class="tool-btn" id="svg-align-center">⇹ Align Center</button>
+      <button class="tool-btn" id="svg-dup">📄 Duplicate Node</button>
+      <button class="tool-btn" id="svg-shadow">🌑 Drop Shadow</button>
+      <button class="tool-btn" id="svg-clear">🗑️ Clear Canvas</button>
+    </div>
+
+    <div class="tool-group">
+      <span class="tool-title">Export & VFS</span>
+      <button class="tool-btn primary" id="svg-export-xml">📋 Copy SVG XML</button>
+      <button class="tool-btn" id="svg-save-vfs">💾 Save SVG to VFS</button>
+    </div>
+  `;
+}
+
+function bindSvgEvents(container) {
+  container.querySelector("#tool-select")?.addEventListener("click", () => setTool("select"));
+
+  container.querySelector("#svg-add-rect")?.addEventListener("click", () => {
+    const { color } = getBrushSettings();
+    const svgCode = `<rect x="100" y="100" width="150" height="100" fill="${color}" stroke="#ffffff" stroke-width="2"/>`;
+    layers.push({ type: "rect", x: 100, y: 100, w: 150, h: 100, color, svgCode });
+    saveHistory();
+    renderInspector();
+    redraw();
+  });
+
+  container.querySelector("#svg-add-circle")?.addEventListener("click", () => {
+    const { color } = getBrushSettings();
+    const svgCode = `<circle cx="200" cy="200" r="60" fill="${color}" stroke="#ffffff" stroke-width="2"/>`;
+    layers.push({ type: "circle", cx: 200, cy: 200, r: 60, color, svgCode });
+    saveHistory();
+    renderInspector();
+    redraw();
+  });
+
+  container.querySelector("#svg-add-star")?.addEventListener("click", () => {
+    const { color } = getBrushSettings();
+    const points = "200,100 224,150 279,158 239,197 249,252 200,225 151,252 161,197 121,158 176,150";
+    const svgCode = `<polygon points="${points}" fill="${color}" stroke="#ffffff" stroke-width="2"/>`;
+    layers.push({ type: "star", points, color, svgCode });
+    saveHistory();
+    renderInspector();
+    redraw();
+  });
+
+  container.querySelector("#svg-add-text")?.addEventListener("click", () => {
+    const text = prompt("Enter vector text:", "n3xn DigiArt");
+    if (!text) return;
+    const { color } = getBrushSettings();
+    const svgCode = `<text x="100" y="200" font-family="sans-serif" font-size="48" fill="${color}">${text}</text>`;
+    layers.push({ type: "text", text, x: 100, y: 200, color, size: 48, svgCode });
+    saveHistory();
+    renderInspector();
+    redraw();
+  });
+
+  container.querySelector("#svg-paste-code")?.addEventListener("click", async () => {
+    const code = prompt("Paste raw SVG markup:");
+    if (!code) return;
+    injectSvgMarkup(code);
+  });
+
+  // Conversion Handlers
+  container.querySelector("#conv-svg-to-png")?.addEventListener("click", () => convertSvgToRaster("image/png"));
+  container.querySelector("#conv-svg-to-jpg")?.addEventListener("click", () => convertSvgToRaster("image/jpeg"));
+  container.querySelector("#conv-img-to-svg")?.addEventListener("click", convertRasterToSvg);
+
+  container.querySelector("#svg-align-center")?.addEventListener("click", () => {
+    layers.forEach((l) => { if (l.x !== undefined) l.x = canvas.width / 2 - 50; });
+    redraw();
+  });
+
+  container.querySelector("#svg-dup")?.addEventListener("click", () => {
+    if (layers.length > 0) {
+      layers.push(JSON.parse(JSON.stringify(layers[layers.length - 1])));
+      saveHistory();
+      renderInspector();
+      redraw();
+    }
+  });
+
+  container.querySelector("#svg-clear")?.addEventListener("click", () => {
+    layers = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    saveHistory();
+    renderInspector();
+  });
+
+  container.querySelector("#svg-export-xml")?.addEventListener("click", () => {
+    const xml = generateCurrentSvgXml();
+    navigator.clipboard.writeText(xml);
+    alert("Clean SVG XML copied to clipboard!");
+  });
+
+  container.querySelector("#svg-save-vfs")?.addEventListener("click", saveSvgToVfs);
+}
+
+function generateCurrentSvgXml() {
+  let xml = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">\n`;
+  layers.forEach((l) => {
+    if (l.svgCode) xml += `  ${l.svgCode}\n`;
+    else if (l.type === "text") xml += `  <text x="${l.x}" y="${l.y}" font-size="${l.size || 24}" fill="${l.color || '#ffffff'}">${l.text}</text>\n`;
+  });
+  xml += `</svg>`;
+  return xml;
+}
+
+function injectSvgMarkup(code) {
+  const blob = new Blob([code], { type: "image/svg+xml" });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    layers.push({ type: "svg-import", img, x: 0, y: 0, w: img.width || canvas.width, h: img.height || canvas.height, svgCode: code });
+    saveHistory();
+    renderInspector();
+    redraw();
+  };
+  img.src = url;
+}
+
+function convertSvgToRaster(mimeType = "image/png") {
+  const xml = generateCurrentSvgXml();
+  const blob = new Blob([xml], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0);
+    const ext = mimeType === "image/jpeg" ? "jpg" : "png";
+    const a = document.createElement("a");
+    a.href = canvas.toDataURL(mimeType);
+    a.download = `converted-digiart.${ext}`;
+    a.click();
+    updateStatus(`Converted SVG to ${ext.toUpperCase()} successfully!`);
+  };
+  img.src = url;
+}
+
+function convertRasterToSvg() {
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imgData.data;
+  let pathData = "";
+
+  // Grid sampling vector path tracing simulation
+  for (let y = 0; y < canvas.height; y += 8) {
+    for (let x = 0; x < canvas.width; x += 8) {
+      const idx = (y * canvas.width + x) * 4;
+      const alpha = data[idx + 3];
+      if (alpha > 128) {
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        const hex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+        pathData += `<rect x="${x}" y="${y}" width="8" height="8" fill="${hex}"/>\n`;
+      }
+    }
+  }
+
+  const svgMarkup = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">\n${pathData}</svg>`;
+  injectSvgMarkup(svgMarkup);
+  switchMode("svg");
+  updateStatus("Raster image vectorised into SVG layers!");
+}
+
+/* ==========================================================================
+   2. IMAGE & MEME ENGINE
    ========================================================================== */
 
 function buildImageToolbar() {
@@ -346,16 +547,12 @@ function buildImageToolbar() {
 
     <div class="tool-group">
       <span class="tool-title">Image Adjustments</span>
-      <button class="tool-btn" id="img-crop">✂️ Visual Crop</button>
       <button class="tool-btn" id="img-rotate">↻ Rotate 90°</button>
       <button class="tool-btn" id="img-flip-h">↔ Flip H</button>
       <button class="tool-btn" id="img-flip-v">↕ Flip V</button>
       <button class="tool-btn" id="img-meme-preset">🤡 Meme Layout</button>
       <button class="tool-btn" id="img-vignette">👁 Vignette</button>
-      <button class="tool-btn" id="img-blur-censor">░ Censor Region</button>
       <button class="tool-btn" id="img-border">🖼️ Add Border</button>
-      <button class="tool-btn" id="img-stamp">🏷️ Add Stamp</button>
-      <button class="tool-btn" id="img-pipette">🧪 Eyedropper</button>
     </div>
 
     <div class="tool-group">
@@ -387,8 +584,8 @@ function bindImageEvents(container) {
 }
 
 function applyMemeLayout() {
-  layers.push({ type: "text", text: "TOP TEXT", font: "Impact", size: 54, color: "#ffffff", stroke: "#000000", x: canvas.width / 2 - 100, y: 40 });
-  layers.push({ type: "text", text: "BOTTOM TEXT", font: "Impact", size: 54, color: "#ffffff", stroke: "#000000", x: canvas.width / 2 - 140, y: canvas.height - 80 });
+  layers.push({ type: "text", text: "TOP TEXT", font: "Impact", size: 54, color: "#ffffff", stroke: "#000000", x: canvas.width / 2 - 100, y: 60 });
+  layers.push({ type: "text", text: "BOTTOM TEXT", font: "Impact", size: 54, color: "#ffffff", stroke: "#000000", x: canvas.width / 2 - 140, y: canvas.height - 60 });
   saveHistory();
   renderInspector();
   redraw();
@@ -432,69 +629,7 @@ function flipImage(h, v) {
 }
 
 /* ==========================================================================
-   2. SVG / VECTOR STUDIO (20 TOOLS)
-   ========================================================================== */
-
-function buildSvgToolbar() {
-  return `
-    <div class="tool-group">
-      <span class="tool-title">Vector Injection</span>
-      <button class="tool-btn" id="svg-paste-code">📝 Paste SVG Code</button>
-      <button class="tool-btn" id="svg-load-vfs">📁 Open SVG File</button>
-      <button class="tool-btn" id="svg-add-rect">🟩 Add Rect Vector</button>
-      <button class="tool-btn" id="svg-add-circle">🔴 Add Circle Vector</button>
-      <button class="tool-btn" id="svg-add-text">🔤 Vector Text</button>
-    </div>
-
-    <div class="tool-group">
-      <span class="tool-title">Vector Node Operations</span>
-      <button class="tool-btn" id="svg-align-left">⇤ Align Left</button>
-      <button class="tool-btn" id="svg-align-center">⇹ Align Center</button>
-      <button class="tool-btn" id="svg-align-right">⇥ Align Right</button>
-      <button class="tool-btn" id="svg-dup">📄 Duplicate Node</button>
-      <button class="tool-btn" id="svg-group">🔗 Group Layers</button>
-      <button class="tool-btn" id="svg-shadow">🌑 Drop Shadow</button>
-      <button class="tool-btn" id="svg-lock">🔒 Lock Layer</button>
-    </div>
-
-    <div class="tool-group">
-      <span class="tool-title">Vector Export</span>
-      <button class="tool-btn primary" id="svg-export-xml">📋 Copy SVG XML</button>
-      <button class="tool-btn" id="svg-save-vfs">💾 Save SVG to VFS</button>
-    </div>
-  `;
-}
-
-function bindSvgEvents(container) {
-  container.querySelector("#svg-paste-code")?.addEventListener("click", async () => {
-    const code = prompt("Paste raw SVG markup:");
-    if (!code) return;
-    const blob = new Blob([code], { type: "image/svg+xml" });
-    const url = URL.createObjectURL(blob);
-    const img = new Image();
-    img.onload = () => {
-      layers.push({ type: "image", img, x: 50, y: 50, w: img.width || 200, h: img.height || 200, svgCode: code });
-      saveHistory();
-      renderInspector();
-      redraw();
-    };
-    img.src = url;
-  });
-
-  container.querySelector("#svg-export-xml")?.addEventListener("click", () => {
-    let xml = `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}">\n`;
-    layers.forEach((l) => {
-      if (l.svgCode) xml += `  ${l.svgCode}\n`;
-      else if (l.type === "text") xml += `  <text x="${l.x}" y="${l.y}" font-size="${l.size}" fill="${l.color}">${l.text}</text>\n`;
-    });
-    xml += `</svg>`;
-    navigator.clipboard.writeText(xml);
-    alert("Clean SVG XML copied to clipboard!");
-  });
-}
-
-/* ==========================================================================
-   3. GIF ANIMATOR ENGINE (20 TOOLS)
+   3. GIF ANIMATOR ENGINE
    ========================================================================== */
 
 function buildGifToolbar() {
@@ -510,8 +645,6 @@ function buildGifToolbar() {
 
     <div class="tool-group">
       <span class="tool-title">Global Frame Edits</span>
-      <button class="tool-btn" id="gif-global-caption">💬 Add Global Caption</button>
-      <button class="tool-btn" id="gif-global-watermark">🏷️ Add Watermark</button>
       <button class="tool-btn" id="gif-del-frame">🗑️ Delete Frame</button>
       <button class="tool-btn" id="gif-dup-frame">📋 Duplicate Frame</button>
       <button class="tool-btn" id="gif-speed">⚡ Speed 2x / 0.5x</button>
@@ -576,7 +709,7 @@ function redrawGifFrame() {
 }
 
 /* ==========================================================================
-   4. VIDEO STUDIO ENGINE (20 TOOLS)
+   4. VIDEO STUDIO ENGINE
    ========================================================================== */
 
 function buildVideoToolbar() {
@@ -584,23 +717,17 @@ function buildVideoToolbar() {
     <div class="tool-group">
       <span class="tool-title">Playback & Trim</span>
       <button class="tool-btn primary" id="vid-play">▶ Play / Pause</button>
-      <button class="tool-btn" id="vid-set-in">🚩 Set Trim In</button>
-      <button class="tool-btn" id="vid-set-out">🏁 Set Trim Out</button>
-      <button class="tool-btn" id="vid-split">✂️ Split Clip</button>
       <button class="tool-btn" id="vid-loop">🔁 Toggle Loop</button>
     </div>
 
     <div class="tool-group">
       <span class="tool-title">Audio & Speed</span>
       <button class="tool-btn" id="vid-mute">🔇 Mute / Unmute</button>
-      <button class="tool-btn" id="vid-volume">🔊 Volume Gain</button>
       <button class="tool-btn" id="vid-speed">⏩ Playback Speed</button>
-      <button class="tool-btn" id="vid-extract-audio">🎵 Extract Audio Track</button>
     </div>
 
     <div class="tool-group">
       <span class="tool-title">Overlay & Export</span>
-      <button class="tool-btn" id="vid-subtitle">💬 Burn Subtitles</button>
       <button class="tool-btn" id="vid-snapshot">📸 Frame Snapshot</button>
       <button class="tool-btn primary" id="vid-record">⏺ Record / Export Video</button>
       <button class="tool-btn" id="vid-save-vfs">📁 Save Video to VFS</button>
@@ -627,6 +754,7 @@ function bindVideoEvents(container) {
   });
 
   container.querySelector("#vid-record")?.addEventListener("click", startVideoRecorder);
+  container.querySelector("#vid-save-vfs")?.addEventListener("click", saveVideoToVfs);
 }
 
 function startVideoRecorder() {
@@ -659,7 +787,7 @@ function startVideoRecorder() {
 }
 
 /* ==========================================================================
-   5. WEB AUDIO WORKBENCH (20 TOOLS)
+   5. WEB AUDIO WORKBENCH
    ========================================================================== */
 
 function buildAudioToolbar() {
@@ -668,18 +796,13 @@ function buildAudioToolbar() {
       <span class="tool-title">Transport</span>
       <button class="tool-btn primary" id="aud-play">${isAudioPlaying ? "⏸ Pause" : "▶ Play Audio"}</button>
       <button class="tool-btn" id="aud-stop">⏹ Stop</button>
-      <button class="tool-btn" id="aud-trim">✂️ Trim Selection</button>
-      <button class="tool-btn" id="aud-silence">🔇 Silence Region</button>
     </div>
 
     <div class="tool-group">
       <span class="tool-title">DSP & FX Filters</span>
       <button class="tool-btn" id="aud-fade-in">📈 Fade In</button>
       <button class="tool-btn" id="aud-fade-out">📉 Fade Out</button>
-      <button class="tool-btn" id="aud-gain">🔊 Boost Gain</button>
-      <button class="tool-btn" id="aud-normalize">📊 Normalize 0dB</button>
       <button class="tool-btn" id="aud-reverse">🔄 Reverse Buffer</button>
-      <button class="tool-btn" id="aud-echo">🌌 Add Echo / Reverb</button>
     </div>
 
     <div class="tool-group">
@@ -697,6 +820,7 @@ function bindAudioEvents(container) {
   container.querySelector("#aud-fade-out")?.addEventListener("click", () => applyAudioFade(false));
   container.querySelector("#aud-reverse")?.addEventListener("click", reverseAudioBuffer);
   container.querySelector("#aud-export-wav")?.addEventListener("click", exportAudioWav);
+  container.querySelector("#aud-save-vfs")?.addEventListener("click", saveAudioToVfs);
 }
 
 function initAudioContext() {
@@ -806,6 +930,49 @@ function exportAudioWav() {
   a.click();
 }
 
+function audioBufferToWavBlob(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1; // PCM
+  const bitDepth = 16;
+  const length = buffer.length * numChannels * 2;
+  const bufferArray = new ArrayBuffer(44 + length);
+  const view = new DataView(bufferArray);
+
+  /* WAV Header */
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + length, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * 2, true);
+  view.setUint16(32, numChannels * 2, true);
+  view.setUint16(34, bitDepth, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, length, true);
+
+  // Write PCM audio
+  let offset = 44;
+  for (let i = 0; i < buffer.length; i++) {
+    for (let channel = 0; channel < numChannels; channel++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+      view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([bufferArray], { type: 'audio/wav' });
+}
+
+function writeString(view, offset, string) {
+  for (let i = 0; i < string.length; i++) {
+    view.setUint8(offset + i, string.charCodeAt(i));
+  }
+}
+
 /* ==========================================================================
    DYNAMIC UI RENDERER & INSPECTOR
    ========================================================================== */
@@ -813,12 +980,12 @@ function exportAudioWav() {
 function renderToolbar() {
   const tb = panel.querySelector("#studio-toolbar");
   if (!tb) return;
-  if (currentMode === "image") {
-    tb.innerHTML = buildImageToolbar();
-    bindImageEvents(tb);
-  } else if (currentMode === "svg") {
+  if (currentMode === "svg") {
     tb.innerHTML = buildSvgToolbar();
     bindSvgEvents(tb);
+  } else if (currentMode === "image") {
+    tb.innerHTML = buildImageToolbar();
+    bindImageEvents(tb);
   } else if (currentMode === "gif") {
     tb.innerHTML = buildGifToolbar();
     bindGifEvents(tb);
@@ -837,14 +1004,14 @@ function renderInspector() {
   insp.innerHTML = `
     <div class="insp-section">
       <h4>Properties</h4>
-      <label>Stroke Color</label>
+      <label>Primary Color</label>
       <input type="color" id="insp-color" value="#00f3ff"/>
       <label>Stroke Width</label>
       <input type="range" id="insp-size" min="1" max="50" value="4"/>
     </div>
 
     <div class="insp-section">
-      <h4>Layers Stack</h4>
+      <h4>Layers Stack (${layers.length})</h4>
       <div class="insp-layer-list">
         ${layers.map((l, i) => `<div class="insp-layer-item ${i === selectedLayerIndex ? "active" : ""}">${l.type.toUpperCase()} Layer${i + 1}</div>`).reverse().join("")}
       </div>
@@ -852,8 +1019,73 @@ function renderInspector() {
   `;
 }
 
+function redraw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (baseImage) {
+    ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
+  }
+  layers.forEach((l) => {
+    if (l.img) {
+      ctx.drawImage(l.img, l.x || 0, l.y || 0, l.w || canvas.width, l.h || canvas.height);
+    } else if (l.type === "text") {
+      ctx.font = `${l.size || 24}px sans-serif`;
+      ctx.fillStyle = l.color || "#00f3ff";
+      ctx.fillText(l.text, l.x || 50, l.y || 50);
+    }
+  });
+}
+
+function saveHistory() {
+  if (historyIndex < history.length - 1) {
+    history.splice(historyIndex + 1);
+  }
+  history.push(canvas.toDataURL());
+  historyIndex++;
+}
+
+function undo() {
+  if (historyIndex > 0) {
+    historyIndex--;
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = history[historyIndex];
+  }
+}
+
+function redo() {
+  if (historyIndex < history.length - 1) {
+    historyIndex++;
+    const img = new Image();
+    img.onload = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+    };
+    img.src = history[historyIndex];
+  }
+}
+
+function handleKeyboard(e) {
+  if (e.ctrlKey && e.key === "z") undo();
+  if (e.ctrlKey && e.key === "y") redo();
+}
+
+function exportRaster(mimeType) {
+  const a = document.createElement("a");
+  a.href = canvas.toDataURL(mimeType);
+  a.download = `n3xn-digiart-${Date.now()}.${mimeType === "image/jpeg" ? "jpg" : "png"}`;
+  a.click();
+}
+
+function updateStatus(msg) {
+  const el = panel.querySelector("#st-status-msg");
+  if (el) el.textContent = msg;
+}
+
 /* ==========================================================================
-   VFS FILE LOADERS / SAVERS
+   VFS FILE LOADERS & SAVERS
    ========================================================================== */
 
 async function loadImageFromVfs(path) {
@@ -872,7 +1104,10 @@ async function loadImageFromVfs(path) {
 }
 
 async function loadSvgFromVfs(path) {
-  await loadImageFromVfs(path);
+  const file = await fs.readFile(path);
+  if (!file) return;
+  const text = typeof file.content === "string" ? file.content : new TextDecoder().decode(file.content);
+  injectSvgMarkup(text);
 }
 
 async function loadGifFromVfs(path) {
@@ -895,148 +1130,71 @@ async function loadAudioFromVfs(path) {
   drawAudioWaveform();
 }
 
-async function saveImageToVfs() {
-  const path = prompt("VFS save target path:", sourcePath || `/media/edited-${Date.now()}.png`);
+async function saveSvgToVfs() {
+  const path = prompt("VFS save target path:", sourcePath || "/digiart.svg");
   if (!path) return;
-  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
-  const buf = await blob.arrayBuffer();
-  await fs.writeFile(path, new Uint8Array(buf), { mime: "image/png" });
-  alert("Successfully saved to VFS path: " + path);
+  const xml = generateCurrentSvgXml();
+  await fs.writeFile(path, xml);
+  updateStatus(`Saved SVG Vector to VFS at ${path}`);
+}
+
+async function saveImageToVfs() {
+  const path = prompt("VFS save target path:", sourcePath || "/art.png");
+  if (!path) return;
+  const dataUrl = canvas.toDataURL("image/png");
+  const res = await fetch(dataUrl);
+  const arrayBuf = await res.arrayBuffer();
+  await fs.writeFile(path, new Uint8Array(arrayBuf));
+  updateStatus(`Saved Image to VFS at ${path}`);
+}
+
+async function saveVideoToVfs() {
+  const path = prompt("VFS save video target path:", sourcePath || "/clip.webm");
+  if (!path || recordedChunks.length === 0) return alert("Record a clip first!");
+  const blob = new Blob(recordedChunks, { type: "video/webm" });
+  const arrayBuf = await blob.arrayBuffer();
+  await fs.writeFile(path, new Uint8Array(arrayBuf));
+  updateStatus(`Saved Video to VFS at ${path}`);
+}
+
+async function saveAudioToVfs() {
+  const path = prompt("VFS save audio target path:", sourcePath || "/audio.wav");
+  if (!path || !audioBuffer) return alert("Load audio first!");
+  const wavBlob = audioBufferToWavBlob(audioBuffer);
+  const arrayBuf = await wavBlob.arrayBuffer();
+  await fs.writeFile(path, new Uint8Array(arrayBuf));
+  updateStatus(`Saved Audio to VFS at ${path}`);
 }
 
 /* ==========================================================================
-   HISTORY & UNDO / REDO ENGINE
-   ========================================================================== */
-
-function saveHistory() {
-  const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  history.splice(historyIndex + 1);
-  history.push(snapshot);
-  historyIndex = history.length - 1;
-}
-
-function undo() {
-  if (historyIndex > 0) {
-    historyIndex--;
-    ctx.putImageData(history[historyIndex], 0, 0);
-  }
-}
-
-function redo() {
-  if (historyIndex < history.length - 1) {
-    historyIndex++;
-    ctx.putImageData(history[historyIndex], 0, 0);
-  }
-}
-
-function redraw() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (baseImage) ctx.drawImage(baseImage, 0, 0, canvas.width, canvas.height);
-}
-
-function updateStatus(msg) {
-  const el = panel.querySelector("#st-status-msg");
-  if (el) el.textContent = msg;
-}
-
-function exportRaster(mime) {
-  const url = canvas.toDataURL(mime, 0.92);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `n3xn-export-${Date.now()}.${mime.includes("jpeg") ? "jpg" : "png"}`;
-  a.click();
-}
-
-function handleKeyboard(e) {
-  if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-    e.preventDefault();
-    if (e.shiftKey) redo(); else undo();
-  }
-}
-
-/* Helper to convert Web Audio Buffer to WAV blob */
-function audioBufferToWavBlob(buffer) {
-  const numOfChan = buffer.numberOfChannels,
-    length = buffer.length * numOfChan * 2 + 44,
-    out = new DataView(new ArrayBuffer(length)),
-    channels = [];
-  let sample, offset = 0, pos = 0;
-
-  function setUint16(data) { out.setUint16(pos, data, true); pos += 2; }
-  function setUint32(data) { out.setUint32(pos, data, true); pos += 4; }
-
-  setUint32(0x46464952); setUint32(length - 8); setUint32(0x45564157);
-  setUint32(0x20746d66); setUint32(16); setUint16(1); setUint16(numOfChan);
-  setUint32(buffer.sampleRate); setUint32(buffer.sampleRate * 2 * numOfChan);
-  setUint16(numOfChan * 2); setUint16(16); setUint32(0x61746164); setUint32(length - pos - 4);
-
-  for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i));
-  while (offset < buffer.length) {
-    for (let i = 0; i < numOfChan; i++) {
-      sample = Math.max(-1, Math.min(1, channels[i][offset]));
-      out.setInt16(pos, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-      pos += 2;
-    }
-    offset++;
-  }
-  return new Blob([out], { type: "audio/wav" });
-}
-
-/* ==========================================================================
-   CSS STYLESHEET INJECTION (CYBER DARK THEME CONTINUITY)
+   STYLES INJECTION
    ========================================================================== */
 
 function injectStyles() {
-  if (document.getElementById("n3xn-studio-styles")) return;
+  if (document.getElementById("n3xn-digiart-styles")) return;
   const style = document.createElement("style");
-  style.id = "n3xn-studio-styles";
+  style.id = "n3xn-digiart-styles";
   style.textContent = `
-    #n3xn-media-studio {
-      position: fixed; inset: 16px; z-index: 99999;
-      display: flex; flex-direction: column;
-      background: #0a0a0f; color: #e2e8f0;
-      border: 1px solid #2d3748; border-radius: 8px;
-      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.8);
-      font-family: system-ui, -apple-system, sans-serif;
-      overflow: hidden;
-    }
-    .studio-header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 8px 16px; background: #141824; border-bottom: 1px solid #2d3748;
-    }
-    .studio-brand { display: flex; align-items: center; gap: 8px; font-weight: bold; color: #00f3ff; }
-    .studio-mode-tabs { display: flex; gap: 4px; }
-    .tab-btn {
-      background: #0d0e15; border: 1px solid #2d3748; color: #a0aec0;
-      padding: 6px 12px; font-size: 12px; border-radius: 4px; cursor: pointer;
-    }
-    .tab-btn.active { background: #2b6cb0; color: #fff; border-color: #63b3ed; }
+    #n3xn-media-studio { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: #0c0d14; color: #e2e8f0; display: flex; flex-direction: column; z-index: 99999; font-family: system-ui, sans-serif; }
+    .studio-header { display: flex; align-items: center; justify-content: space-between; padding: 10px 20px; background: #141622; border-bottom: 1px solid #2d3748; }
+    .studio-logo { font-weight: bold; color: #00f3ff; margin-right: 8px; }
+    .studio-mode-tabs .tab-btn { background: transparent; border: none; color: #a0aec0; padding: 8px 14px; margin: 0 4px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+    .studio-mode-tabs .tab-btn.active, .studio-mode-tabs .tab-btn:hover { background: #2d3748; color: #00f3ff; }
     .studio-body { display: flex; flex: 1; overflow: hidden; }
-    .studio-toolbar {
-      width: 180px; background: #141824; border-right: 1px solid #2d3748;
-      padding: 10px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto;
-    }
-    .tool-group { display: flex; flex-direction: column; gap: 4px; }
-    .tool-title { font-size: 10px; text-transform: uppercase; color: #718096; font-weight: bold; }
-    .tool-btn {
-      background: #1a202c; border: 1px solid #2d3748; color: #e2e8f0;
-      padding: 6px 8px; font-size: 11px; border-radius: 4px; text-align: left; cursor: pointer;
-    }
-    .tool-btn:hover { background: #2d3748; color: #00f3ff; }
-    .tool-btn.primary { background: #00b4d8; color: #000; font-weight: bold; border: none; }
-    .tool-btn.active { border-color: #00f3ff; background: #2c5282; }
-    .studio-viewport {
-      flex: 1; background: #07080c; display: flex;
-      align-items: center; justify-content: center; padding: 20px; overflow: auto;
-    }
-    .studio-inspector {
-      width: 220px; background: #141824; border-left: 1px solid #2d3748;
-      padding: 12px; display: flex; flex-direction: column; gap: 12px;
-    }
-    .studio-statusbar {
-      display: flex; justify-content: space-between; padding: 6px 16px;
-      background: #141824; border-top: 1px solid #2d3748; font-size: 11px; color: #a0aec0;
-    }
+    .studio-toolbar { width: 220px; background: #11131f; border-right: 1px solid #2d3748; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+    .tool-group { display: flex; flex-direction: column; gap: 6px; }
+    .tool-title { font-size: 11px; text-transform: uppercase; color: #718096; letter-spacing: 1px; margin-bottom: 4px; }
+    .tool-btn { background: #1a202c; border: 1px solid #2d3748; color: #e2e8f0; padding: 8px; border-radius: 6px; text-align: left; cursor: pointer; font-size: 13px; }
+    .tool-btn:hover, .tool-btn.active { border-color: #00f3ff; color: #00f3ff; }
+    .tool-btn.primary { background: #00f3ff; color: #0c0d14; font-weight: bold; border: none; }
+    .studio-viewport { flex: 1; display: flex; align-items: center; justify-content: center; background: #050508; position: relative; padding: 20px; }
+    #studio-canvas { max-width: 100%; max-height: 100%; background: #ffffff10; border-radius: 4px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+    .studio-inspector { width: 240px; background: #11131f; border-left: 1px solid #2d3748; padding: 15px; display: flex; flex-direction: column; gap: 15px; }
+    .insp-section input { width: 100%; margin-top: 6px; }
+    .insp-layer-list { margin-top: 8px; max-height: 200px; overflow-y: auto; }
+    .insp-layer-item { padding: 6px; background: #1a202c; border-radius: 4px; margin-bottom: 4px; font-size: 12px; }
+    .insp-layer-item.active { border: 1px solid #00f3ff; }
+    .studio-statusbar { display: flex; justify-content: space-between; padding: 8px 20px; background: #141622; border-top: 1px solid #2d3748; font-size: 12px; color: #a0aec0; }
   `;
   document.head.appendChild(style);
 }
