@@ -35,6 +35,7 @@ const SHELL_URLS = [
   "./",
   "./index.html",
   "./V0RT3X_chat.html",
+  "./n3xn-ai.html",
   "./n3xn-chat.html",
   "./manifest.webmanifest",
   "./n3xn-lang-highlights.js",
@@ -140,6 +141,11 @@ const EXTERNAL_CORE = [
   "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.js",
   "https://cdn.jsdelivr.net/npm/sql.js@1.11.0/dist/sql-wasm.wasm",
   "https://cdn.jsdelivr.net/npm/biwascheme@0.8.0/release/biwascheme-min.js",
+  // WebLLM (browser local AI)
+"https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm",
+"https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.85/+esm",
+"https://esm.sh/@mlc-ai/web-llm",
+"https://esm.run/@mlc-ai/web-llm",
 ];
 
 self.addEventListener("install", (event) => {
