@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>n3xn AI</title>
+  <style>
+    :root {
+      --bg: #0f1115; --panel: #161a22; --card: #1c212b; --border: #2a3140;
+      --text: #e8ecf4; --muted: #8b95a8; --accent: #6ea8fe;
+      --good: #3dd68c; --warn: #f5a524; --bad: #f31260;
+      --user: #2a3a5c; --assistant: #1e2430; --error-bg: #2a1518;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg); color: var(--text);
+      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+    header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 16px; background: var(--panel);
+      border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap;
+    }
+    .logo { font-weight: 700; font-size: 1.15rem; color: var(--accent); white-space: nowrap; }
+    .header-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    select, button, input[type="text"] {
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 12px; font-size: 0.9rem;
+    }
+    select, button { cursor: pointer; }
+    select:hover, button:hover, input[type="text"]:focus { border-color: var(--accent); outline: none; }
+    button.primary { background: var(--accent); color: #0f1115; border-color: var(--accent); font-weight: 600; }
+    button.primary:hover { filter: brightness(1.08); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    main { flex: 1; display: flex; overflow: hidden; }
+    aside {
+      width: 300px; background: var(--panel); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0;
+    }
+    .sidebar-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+    .sidebar-section h3 {
+      font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+      color: var(--muted); margin-bottom: 10px;
+    }
+    .status-line {
+      font-size: 0.85rem; margin-bottom: 6px;
+      display: flex; justify-content: space-between; gap: 8px;
+    }
+    .status-ok { color: var(--good); } .status-warn { color: var(--warn); } .status-bad { color: var(--bad); }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
+    textarea.system-prompt, input.base-url {
+      width: 100%; background: var(--card); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); padding: 8px; font-size: 0.85rem;
+    }
+    textarea.system-prompt { height: 90px; resize: vertical; }
+    .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #messages {
+      flex: 1; overflow-y: auto; padding: 20px 16px;
+      display: flex; flex-direction: column; gap: 14px;
+    }
+    .msg {
+      max-width: 90%; padding: 12px 16px; border-radius: 14px;
+      line-height: 1.5; font-size: 0.95rem; white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.user { align-self: flex-end; background: var(--user); border-bottom-right-radius: 4px; }
+    .msg.assistant {
+      align-self: flex-start; background: var(--assistant);
+      border: 1px solid var(--border); border-bottom-left-radius: 4px;
+    }
+    .msg.system {
+      align-self: center; background: transparent; color: var(--muted);
+      font-size: 0.85rem; text-align: center; max-width: 100%;
+    }
+    .msg.error {
+      align-self: center; background: var(--error-bg); border: 1px solid var(--bad);
+      color: #ff8a9a; font-size: 0.85rem; max-width: 95%;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+    .msg .role { font-size: 0.75rem; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+    .input-area {
+      padding: 12px 16px 16px; border-top: 1px solid var(--border);
+      background: var(--panel); display: flex; gap: 10px; align-items: flex-end;
+    }
+    #userInput {
+      flex: 1; background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; color: var(--text); padding: 12px 14px; font-size: 0.95rem;
+      resize: none; min-height: 48px; max-height: 140px; font-family: inherit;
+    }
+    #userInput:focus { outline: none; border-color: var(--accent); }
+    #sendBtn { height: 48px; padding: 0 18px; border-radius: 12px; }
+    #progressOverlay {
+      display: none; position: fixed; inset: 0; background: rgba(15,17,21,0.85);
+      z-index: 100; align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+    }
+    #progressOverlay.visible { display: flex; }
+    .progress-box {
+      background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+      padding: 24px 32px; min-width: 300px; max-width: 90vw; text-align: center;
+    }
+    .progress-bar-bg { height: 8px; background: var(--card); border-radius: 4px; overflow: hidden; margin: 14px 0 8px; }
+    .progress-bar { height: 100%; background: var(--accent); width: 0%; transition: width 0.2s; }
+    #progressText { font-size: 0.9rem; color: var(--muted); }
+    .note { font-size: 0.8rem; color: var(--muted); margin-top: 8px; line-height: 1.4; }
+    .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; margin-top: 8px; color: var(--muted); }
+    @media (max-width: 700px) {
+      aside { position: fixed; left: -300px; top: 0; bottom: 0; z-index: 50; transition: left 0.25s; }
+      aside.open { left: 0; }
+      .menu-btn { display: inline-block !important; }
+    }
+    .menu-btn { display: none; }
+  </style>
+</head>
+<body>
+  <div id="progressOverlay">
+    <div class="progress-box">
+      <div id="progressTitle" style="font-weight:600;margin-bottom:4px">Loading model…</div>
+      <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+      <div id="progressText">Starting…</div>
+    </div>
+  </div>
+
+  <header>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="menu-btn" id="menuBtn">☰</button>
+      <div class="logo">n3xn AI</div>
+    </div>
+    <div class="header-controls">
+      <select id="modelSelect">
+        <option value="">Select a model…</option>
+        <optgroup label="Tiny (start here)">
+          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC" selected>SmolLM2 360M (~210 MB)</option>
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen2.5 0.5B (~280 MB)</option>
+          <option value="Qwen3-0.6B-q4f16_1-MLC">Qwen3 0.6B (~350 MB)</option>
+        </optgroup>
+        <optgroup label="Small">
+          <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B (~710 MB)</option>
+          <option value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC">Qwen2.5 1.5B (~870 MB)</option>
+          <option value="Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC">Qwen2.5 Coder 1.5B (~870 MB)</option>
+        </optgroup>
+      </select>
+      <button id="loadBtn" class="primary">Load Model</button>
+      <button id="clearBtn">Clear Chat</button>
+    </div>
+  </header>
+
+  <main>
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <h3>Status</h3>
+        <div class="status-line"><span>WebGPU</span><span id="webgpuStatus">checking…</span></div>
+        <div class="status-line"><span>WebLLM</span><span id="webllmStatus">loading…</span></div>
+        <div class="status-line"><span>Model</span><span id="modelStatus">None</span></div>
+        <div class="status-line"><span>Engine</span><span id="engineStatus">Idle</span></div>
+        <div class="status-line"><span>Base</span><span id="baseStatus" style="font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis">—</span></div>
+      </div>
+
+      <div class="sidebar-section">
+        <h3>n3xn Base URL</h3>
+        <label for="baseUrl">Origin (auto-detected from blob if possible)</label>
+        <input type="text" id="baseUrl" class="base-url" placeholder="https://n3xn-vfs.pages.dev">
+        <button id="reloadLibBtn" style="width:100%;margin-top:8px">Reload WebLLM with this base</button>
+        <p class="note">If opened via n3xn blob runner, paste the real site origin here if auto-detect is wrong.</p>
+      </div>
+
+      <div class="sidebar-section">
+        <h3>Personality</h3>
+        <label for="personality">Preset</label>
+        <select id="personality" style="width:100%;margin-bottom:10px">
+          <option value="default">Helpful & clear</option>
+          <option value="chill">Chill & casual</option>
+          <option value="concise">Very concise</option>
+          <option value="coding">Coding assistant</option>
+          <option value="custom">Custom (edit below)</option>
+        </select>
+        <label for="systemPrompt">System instructions</label>
+        <textarea id="systemPrompt" class="system-prompt"></textarea>
+      </div>
+
+      <div class="sidebar-section">
+        <h3>Debug</h3>
+        <div class="checkbox-row">
+          <input type="checkbox" id="showErrors" checked>
+          <label for="showErrors" style="margin:0">Show errors in chat</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="shareErrorsWithAI">
+          <label for="shareErrorsWithAI" style="margin:0">Include errors when chatting</label>
+        </div>
+      </div>
+    </aside>
+
+    <div class="chat-area">
+      <div id="messages"></div>
+      <div class="input-area">
+        <textarea id="userInput" placeholder="Message n3xn AI…" rows="1"></textarea>
+        <button id="sendBtn" class="primary" disabled>Send</button>
+      </div>
+    </div>
+  </main>
+
+  <script type="module">
+    let engine = null;
+    let isGenerating = false;
+    let webllmReady = false;
+    let CreateMLCEngine = null;
+    let recentErrors = [];
+    let detectedBase = "";
+
+    const personalities = {
+      default: "You are n3xn AI, a helpful, clear, and friendly assistant running fully locally in the browser. Keep answers practical and easy to understand.",
+      chill: "You are n3xn AI. Keep things relaxed, casual, and friendly. Use simple language. It's cool to be a bit laid-back and use light humor when it fits.",
+      concise: "You are n3xn AI. Give short, direct answers. Avoid filler. Get to the point quickly.",
+      coding: "You are n3xn AI, a coding assistant. Help with HTML, CSS, JavaScript, and general programming. Prefer clear explanations and working code examples. Keep answers focused."
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function addMessage(role, content) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      if (role === "user" || role === "assistant") {
+        const roleLabel = document.createElement("div");
+        roleLabel.className = "role";
+        roleLabel.textContent = role === "user" ? "You" : "n3xn AI";
+        div.appendChild(roleLabel);
+      }
+      const text = document.createElement("div");
+      text.textContent = content;
+      div.appendChild(text);
+      $("messages").appendChild(div);
+      $("messages").scrollTop = $("messages").scrollHeight;
+      return text;
+    }
+
+    function addError(msg) {
+      recentErrors.push(String(msg));
+      if (recentErrors.length > 20) recentErrors.shift();
+      if ($("showErrors")?.checked) addMessage("error", msg);
+      console.error(msg);
+    }
+
+    function setStatus(id, text, cls = "") {
+      const el = $(id);
+      if (el) { el.textContent = text; el.className = cls; }
+    }
+
+    function showProgress(show, title = "Loading…", text = "", pct = 0) {
+      const overlay = $("progressOverlay");
+      if (show) {
+        overlay.classList.add("visible");
+        $("progressTitle").textContent = title;
+        $("progressText").textContent = text;
+        $("progressBar").style.width = Math.min(100, Math.max(0, pct)) + "%";
+      } else {
+        overlay.classList.remove("visible");
+      }
+    }
+
+    window.onerror = function (message, source, lineno, colno) {
+      addError(`JS Error: ${message}\n@ ${source || "?"}:${lineno || "?"}:${colno || "?"}`);
+      return false;
+    };
+    window.addEventListener("unhandledrejection", (e) => {
+      addError("Promise error: " + (e.reason?.message || String(e.reason)));
+    });
+
+    function applyPersonality() {
+      const val = $("personality").value;
+      if (val !== "custom" && personalities[val]) {
+        $("systemPrompt").value = personalities[val];
+      }
+    }
+
+    /** Detect real origin even when running inside a blob: URL */
+    function detectBaseOrigin() {
+      // 1. Normal case
+      if (location.protocol === "https:" || location.protocol === "http:") {
+        if (location.origin && location.origin !== "null") {
+          return location.origin;
+        }
+      }
+
+      // 2. blob:https://real-origin/uuid  →  https://real-origin
+      if (location.protocol === "blob:") {
+        try {
+          // location.href is like: blob:https://n3xn-vfs.pages.dev/uuid
+          const href = location.href || "";
+          const m = href.match(/^blob:(https?:\/\/[^/]+)/);
+          if (m) return m[1];
+
+          // fallback: some browsers expose it differently
+          if (location.origin && location.origin.startsWith("http")) {
+            return location.origin;
+          }
+        } catch (_) {}
+      }
+
+      // 3. document.baseURI sometimes still has the real page
+      try {
+        if (document.baseURI) {
+          const u = new URL(document.baseURI);
+          if (u.protocol === "http:" || u.protocol === "https:") {
+            return u.origin;
+          }
+          if (u.protocol === "blob:") {
+            const m = document.baseURI.match(/^blob:(https?:\/\/[^/]+)/);
+            if (m) return m[1];
+          }
+        }
+      } catch (_) {}
+
+      // 4. referrer
+      try {
+        if (document.referrer) {
+          const u = new URL(document.referrer);
+          if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
+        }
+      } catch (_) {}
+
+      return "";
+    }
+
+    function getBase() {
+      const manual = ($("baseUrl").value || "").trim().replace(/\/+$/, "");
+      if (manual) return manual;
+      return detectedBase || "";
+    }
+
+    async function checkWebGPU() {
+      if (!navigator.gpu) {
+        setStatus("webgpuStatus", "Not supported", "status-bad");
+        addMessage("system", "WebGPU is not available.");
+        return false;
+      }
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          setStatus("webgpuStatus", "No adapter", "status-bad");
+          return false;
+        }
+        setStatus("webgpuStatus", "Available", "status-ok");
+        return true;
+      } catch (e) {
+        setStatus("webgpuStatus", "Error", "status-bad");
+        addError("WebGPU check failed: " + e.message);
+        return false;
+      }
+    }
+
+    function buildCandidates(base) {
+      const list = [];
+
+      // 1) n3xn proxy paths (absolute, using real origin)
+      if (base) {
+        list.push(
+          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm/+esm",
+          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm@0.2.85/+esm",
+          base + "/__cdn__/esm/@mlc-ai/web-llm",
+          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm"
+        );
+      }
+
+      // 2) Direct CDNs (may fail inside some blob/sandbox contexts)
+      list.push(
+        "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm",
+        "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.85/+esm",
+        "https://esm.run/@mlc-ai/web-llm",
+        "https://esm.sh/@mlc-ai/web-llm",
+        "https://unpkg.com/@mlc-ai/web-llm?module"
+      );
+
+      // 3) Encoded (avoid simple string rewriters)
+      list.push(
+        atob("aHR0cHM6Ly9jZG4uanNkZWxpdnIubmV0L25wbS9AbWxjLWFpL3dlYi1sbG0vK2VzbQ=="),
+        atob("aHR0cHM6Ly9lc20ucnVuL0BtbGMtYWkvd2ViLWxsbQ=="),
+        atob("aHR0cHM6Ly9lc20uc2gvQG1sYy1haS93ZWItbGxt")
+      );
+
+      return list;
+    }
+
+    async function tryImport(url) {
+      const mod = await import(/* @vite-ignore */ url);
+      let factory = mod.CreateMLCEngine;
+      if (typeof factory !== "function" && mod.default) {
+        factory = mod.default.CreateMLCEngine || mod.default;
+      }
+      if (typeof factory !== "function") {
+        throw new Error("CreateMLCEngine not found in module exports");
+      }
+      return factory;
+    }
+
+    async function loadWebLLM() {
+      setStatus("webllmStatus", "Loading library…", "status-warn");
+      webllmReady = false;
+      CreateMLCEngine = null;
+
+      const base = getBase();
+      setStatus("baseStatus", base || "(none)");
+      addMessage("system", "Using base: " + (base || "(none detected)"));
+
+      const candidates = buildCandidates(base);
+
+      for (const url of candidates) {
+        try {
+          addMessage("system", "Trying:\n" + url);
+          CreateMLCEngine = await tryImport(url);
+          webllmReady = true;
+          setStatus("webllmStatus", "Ready", "status-ok");
+          addMessage("system", "WebLLM loaded successfully from:\n" + url);
+          return true;
+        } catch (err) {
+          addError("Failed: " + url + "\n" + (err.message || err));
+        }
+      }
+
+      setStatus("webllmStatus", "Failed", "status-bad");
+      addMessage("system", "Could not load WebLLM.\n\nNext step is usually to add @mlc-ai/web-llm to n3xn SW offline packs, or open this page from the real origin instead of a blob.");
+      return false;
+    }
+
+    async function loadSelectedModel() {
+      if (!webllmReady || !CreateMLCEngine) {
+        addError("WebLLM is not ready. Set the correct base URL and click Reload WebLLM.");
+        return;
+      }
+      const modelId = $("modelSelect").value;
+      if (!modelId) { alert("Select a model first."); return; }
+      if (isGenerating) return;
+
+      $("loadBtn").disabled = true;
+      $("sendBtn").disabled = true;
+      setStatus("engineStatus", "Loading…", "status-warn");
+      showProgress(true, "Downloading / loading model…", "First time can take several minutes.", 0);
+
+      try {
+        engine = null;
+        engine = await CreateMLCEngine(modelId, {
+          initProgressCallback: (report) => {
+            showProgress(true, "Loading model…", report.text || "Working…", (report.progress || 0) * 100);
+          }
+        });
+        const shortName = modelId.replace("-Instruct-q4f16_1-MLC", "").replace("-q4f16_1-MLC", "");
+        setStatus("modelStatus", shortName, "status-ok");
+        setStatus("engineStatus", "Ready", "status-ok");
+        $("sendBtn").disabled = false;
+        addMessage("system", "Model loaded: " + modelId);
+      } catch (err) {
+        setStatus("engineStatus", "Failed", "status-bad");
+        setStatus("modelStatus", "None", "");
+        addError("Model load failed: " + (err.message || err));
+      } finally {
+        showProgress(false);
+        $("loadBtn").disabled = false;
+      }
+    }
+
+    async function sendMessage() {
+      if (!engine || isGenerating) return;
+      const input = $("userInput");
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = "";
+      addMessage("user", text);
+      isGenerating = true;
+      $("sendBtn").disabled = true;
+      setStatus("engineStatus", "Thinking…", "status-warn");
+      const replyEl = addMessage("assistant", "…");
+
+      try {
+        let systemPrompt = $("systemPrompt").value.trim() || personalities.default;
+        if ($("shareErrorsWithAI")?.checked && recentErrors.length) {
+          systemPrompt += "\n\nRecent browser errors:\n" + recentErrors.slice(-5).join("\n");
+        }
+        const messages = [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text }
+        ];
+        let fullReply = "";
+        const completion = await engine.chat.completions.create({
+          messages, stream: true, temperature: 0.7,
+        });
+        for await (const chunk of completion) {
+          const delta = chunk.choices[0]?.delta?.content || "";
+          fullReply += delta;
+          replyEl.textContent = fullReply || "…";
+          $("messages").scrollTop = $("messages").scrollHeight;
+        }
+        if (!fullReply) replyEl.textContent = "(No response)";
+      } catch (err) {
+        replyEl.textContent = "Error while generating.";
+        addError("Generation error: " + (err.message || err));
+      } finally {
+        isGenerating = false;
+        $("sendBtn").disabled = false;
+        setStatus("engineStatus", "Ready", "status-ok");
+        $("userInput").focus();
+      }
+    }
+
+    function clearChat() {
+      $("messages").innerHTML = "";
+      recentErrors = [];
+      addMessage("system", "Chat cleared.");
+    }
+
+    // Events
+    $("loadBtn").addEventListener("click", loadSelectedModel);
+    $("clearBtn").addEventListener("click", clearChat);
+    $("sendBtn").addEventListener("click", sendMessage);
+    $("personality").addEventListener("change", applyPersonality);
+    $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
+    $("reloadLibBtn").addEventListener("click", () => loadWebLLM());
+    $("userInput").addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+    });
+
+    // Init
+    (async function init() {
+      $("systemPrompt").value = personalities.default;
+
+      detectedBase = detectBaseOrigin();
+      if (detectedBase) {
+        $("baseUrl").value = detectedBase;
+      }
+      setStatus("baseStatus", detectedBase || "(none)");
+
+      addMessage("system", "n3xn AI starting…");
+      addMessage("system", "location.href = " + location.href);
+      addMessage("system", "Detected base = " + (detectedBase || "(none)"));
+
+      if (location.protocol === "blob:") {
+        addMessage("system", "Running inside a blob: URL (n3xn HTML runner).\nUsing detected/real origin for /__cdn__/ paths.");
+      }
+
+      await checkWebGPU();
+      await loadWebLLM();
+
+      if (webllmReady) {
+        addMessage("system", "Ready. Pick a tiny model and click Load Model.");
+      } else {
+        addMessage("system", "WebLLM failed to load.\nCheck the Base URL box (should be like https://n3xn-vfs.pages.dev) then click \"Reload WebLLM with this base\".");
+      }
+    })();
+  </script>
+</body>
+</html>
