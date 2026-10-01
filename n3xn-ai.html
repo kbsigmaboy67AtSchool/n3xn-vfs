@@ -33,9 +33,10 @@
     button.primary { background: var(--accent); color: #0f1115; border-color: var(--accent); font-weight: 600; }
     button.primary:hover { filter: brightness(1.08); }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.small { padding: 6px 10px; font-size: 0.8rem; }
     main { flex: 1; display: flex; overflow: hidden; }
     aside {
-      width: 300px; background: var(--panel); border-right: 1px solid var(--border);
+      width: 320px; background: var(--panel); border-right: 1px solid var(--border);
       display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0;
     }
     .sidebar-section { padding: 14px 16px; border-bottom: 1px solid var(--border); }
@@ -49,11 +50,13 @@
     }
     .status-ok { color: var(--good); } .status-warn { color: var(--warn); } .status-bad { color: var(--bad); }
     label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 4px; }
-    textarea.system-prompt, input.base-url {
+    textarea.system-prompt, textarea.library, input.base-url {
       width: 100%; background: var(--card); border: 1px solid var(--border);
       border-radius: 8px; color: var(--text); padding: 8px; font-size: 0.85rem;
+      font-family: inherit;
     }
-    textarea.system-prompt { height: 90px; resize: vertical; }
+    textarea.system-prompt { height: 80px; resize: vertical; }
+    textarea.library { height: 140px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
     .chat-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     #messages {
       flex: 1; overflow-y: auto; padding: 20px 16px;
@@ -103,8 +106,10 @@
     #progressText { font-size: 0.9rem; color: var(--muted); }
     .note { font-size: 0.8rem; color: var(--muted); margin-top: 8px; line-height: 1.4; }
     .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; margin-top: 8px; color: var(--muted); }
+    .btn-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+    .saved-indicator { font-size: 0.75rem; color: var(--good); margin-top: 4px; min-height: 1.1em; }
     @media (max-width: 700px) {
-      aside { position: fixed; left: -300px; top: 0; bottom: 0; z-index: 50; transition: left 0.25s; }
+      aside { position: fixed; left: -320px; top: 0; bottom: 0; z-index: 50; transition: left 0.25s; }
       aside.open { left: 0; }
       .menu-btn { display: inline-block !important; }
     }
@@ -129,8 +134,8 @@
       <select id="modelSelect">
         <option value="">Select a model…</option>
         <optgroup label="Tiny (start here)">
-          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC" selected>SmolLM2 360M (~210 MB)</option>
-          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Qwen2.5 0.5B (~280 MB)</option>
+          <option value="SmolLM2-360M-Instruct-q4f16_1-MLC">SmolLM2 360M (~210 MB)</option>
+          <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC" selected>Qwen2.5 0.5B (~280 MB)</option>
           <option value="Qwen3-0.6B-q4f16_1-MLC">Qwen3 0.6B (~350 MB)</option>
         </optgroup>
         <optgroup label="Small">
@@ -152,15 +157,6 @@
         <div class="status-line"><span>WebLLM</span><span id="webllmStatus">loading…</span></div>
         <div class="status-line"><span>Model</span><span id="modelStatus">None</span></div>
         <div class="status-line"><span>Engine</span><span id="engineStatus">Idle</span></div>
-        <div class="status-line"><span>Base</span><span id="baseStatus" style="font-size:0.75rem;max-width:160px;overflow:hidden;text-overflow:ellipsis">—</span></div>
-      </div>
-
-      <div class="sidebar-section">
-        <h3>n3xn Base URL</h3>
-        <label for="baseUrl">Origin (auto-detected from blob if possible)</label>
-        <input type="text" id="baseUrl" class="base-url" placeholder="https://n3xn-vfs.pages.dev">
-        <button id="reloadLibBtn" style="width:100%;margin-top:8px">Reload WebLLM with this base</button>
-        <p class="note">If opened via n3xn blob runner, paste the real site origin here if auto-detect is wrong.</p>
       </div>
 
       <div class="sidebar-section">
@@ -178,6 +174,19 @@
       </div>
 
       <div class="sidebar-section">
+        <h3>Knowledge Library</h3>
+        <p class="note" style="margin-top:0;margin-bottom:8px">
+          Extra facts the AI always sees. Edit freely — changes save automatically.
+        </p>
+        <textarea id="knowledgeLibrary" class="library" placeholder="Add facts, project notes, coding rules…"></textarea>
+        <div class="btn-row">
+          <button id="resetLibraryBtn" class="small">Reset to default</button>
+          <button id="saveLibraryBtn" class="small primary">Save now</button>
+        </div>
+        <div id="librarySaved" class="saved-indicator"></div>
+      </div>
+
+      <div class="sidebar-section">
         <h3>Debug</h3>
         <div class="checkbox-row">
           <input type="checkbox" id="showErrors" checked>
@@ -186,6 +195,10 @@
         <div class="checkbox-row">
           <input type="checkbox" id="shareErrorsWithAI">
           <label for="shareErrorsWithAI" style="margin:0">Include errors when chatting</label>
+        </div>
+        <div class="checkbox-row">
+          <input type="checkbox" id="useLibrary" checked>
+          <label for="useLibrary" style="margin:0">Inject knowledge library</label>
         </div>
       </div>
     </aside>
@@ -205,13 +218,25 @@
     let webllmReady = false;
     let CreateMLCEngine = null;
     let recentErrors = [];
-    let detectedBase = "";
+    let saveTimer = null;
+
+    const STORAGE_KEY = "n3xn-ai-knowledge-v1";
+    const PROMPT_KEY = "n3xn-ai-system-prompt-v1";
+
+    const DEFAULT_KNOWLEDGE = `n3xn project facts:
+- n3xn is a browser-based VFS (virtual file system) + coding environment that runs fully client-side.
+- It supports HTML, CSS, JS, Python (Pyodide), React, games (Kaboom, Phaser, etc.), and more.
+- Offline support is handled by a Service Worker with /__cdn__/ proxy paths for libraries.
+- Models and chat can run fully offline after the first download.
+- The user is often on a school Chromebook with limited memory — keep answers practical and not too long.
+- Prefer clear, working code examples over long explanations.
+- When helping with n3xn, talk about real features: VFS, terminal, runners, Monaco editor, offline packs, SW caching.`;
 
     const personalities = {
-      default: "You are n3xn AI, a helpful, clear, and friendly assistant running fully locally in the browser. Keep answers practical and easy to understand.",
-      chill: "You are n3xn AI. Keep things relaxed, casual, and friendly. Use simple language. It's cool to be a bit laid-back and use light humor when it fits.",
+      default: "You are n3xn AI, a helpful local assistant running entirely in the browser inside the n3xn project. Be clear, direct, and practical. Keep answers reasonably short unless asked for more detail.",
+      chill: "You are n3xn AI. Keep things relaxed, casual, and friendly. Use simple language. Light humor is ok.",
       concise: "You are n3xn AI. Give short, direct answers. Avoid filler. Get to the point quickly.",
-      coding: "You are n3xn AI, a coding assistant. Help with HTML, CSS, JavaScript, and general programming. Prefer clear explanations and working code examples. Keep answers focused."
+      coding: "You are n3xn AI, a coding assistant focused on HTML, CSS, JavaScript, and the n3xn environment. Prefer clear explanations and working code examples."
     };
 
     const $ = (id) => document.getElementById(id);
@@ -257,80 +282,67 @@
       }
     }
 
-    window.onerror = function (message, source, lineno, colno) {
-      addError(`JS Error: ${message}\n@ ${source || "?"}:${lineno || "?"}:${colno || "?"}`);
-      return false;
-    };
-    window.addEventListener("unhandledrejection", (e) => {
-      addError("Promise error: " + (e.reason?.message || String(e.reason)));
-    });
+    function showSaved(msg = "Saved") {
+      const el = $("librarySaved");
+      el.textContent = msg;
+      clearTimeout(el._t);
+      el._t = setTimeout(() => { el.textContent = ""; }, 2000);
+    }
 
+    // ---------- Persistence ----------
+    function loadKnowledge() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        return saved !== null ? saved : DEFAULT_KNOWLEDGE;
+      } catch {
+        return DEFAULT_KNOWLEDGE;
+      }
+    }
+
+    function saveKnowledge(value) {
+      try {
+        localStorage.setItem(STORAGE_KEY, value);
+        showSaved("Library saved");
+      } catch (e) {
+        showSaved("Save failed");
+        addError("Could not save knowledge library: " + e.message);
+      }
+    }
+
+    function loadSystemPrompt() {
+      try {
+        return localStorage.getItem(PROMPT_KEY) || personalities.default;
+      } catch {
+        return personalities.default;
+      }
+    }
+
+    function saveSystemPrompt(value) {
+      try {
+        localStorage.setItem(PROMPT_KEY, value);
+      } catch (_) {}
+    }
+
+    // ---------- UI helpers ----------
     function applyPersonality() {
       const val = $("personality").value;
       if (val !== "custom" && personalities[val]) {
         $("systemPrompt").value = personalities[val];
+        saveSystemPrompt($("systemPrompt").value);
       }
     }
 
-    /** Detect real origin even when running inside a blob: URL */
-    function detectBaseOrigin() {
-      // 1. Normal case
-      if (location.protocol === "https:" || location.protocol === "http:") {
-        if (location.origin && location.origin !== "null") {
-          return location.origin;
-        }
-      }
-
-      // 2. blob:https://real-origin/uuid  →  https://real-origin
-      if (location.protocol === "blob:") {
-        try {
-          // location.href is like: blob:https://n3xn-vfs.pages.dev/uuid
-          const href = location.href || "";
-          const m = href.match(/^blob:(https?:\/\/[^/]+)/);
-          if (m) return m[1];
-
-          // fallback: some browsers expose it differently
-          if (location.origin && location.origin.startsWith("http")) {
-            return location.origin;
-          }
-        } catch (_) {}
-      }
-
-      // 3. document.baseURI sometimes still has the real page
-      try {
-        if (document.baseURI) {
-          const u = new URL(document.baseURI);
-          if (u.protocol === "http:" || u.protocol === "https:") {
-            return u.origin;
-          }
-          if (u.protocol === "blob:") {
-            const m = document.baseURI.match(/^blob:(https?:\/\/[^/]+)/);
-            if (m) return m[1];
-          }
-        }
-      } catch (_) {}
-
-      // 4. referrer
-      try {
-        if (document.referrer) {
-          const u = new URL(document.referrer);
-          if (u.protocol === "http:" || u.protocol === "https:") return u.origin;
-        }
-      } catch (_) {}
-
-      return "";
+    function scheduleLibrarySave() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        saveKnowledge($("knowledgeLibrary").value);
+      }, 600);
     }
 
-    function getBase() {
-      const manual = ($("baseUrl").value || "").trim().replace(/\/+$/, "");
-      if (manual) return manual;
-      return detectedBase || "";
-    }
-
+    // ---------- WebGPU / WebLLM ----------
     async function checkWebGPU() {
       if (!navigator.gpu) {
         setStatus("webgpuStatus", "Not supported", "status-bad");
-        addMessage("system", "WebGPU is not available.");
         return false;
       }
       try {
@@ -343,41 +355,20 @@
         return true;
       } catch (e) {
         setStatus("webgpuStatus", "Error", "status-bad");
-        addError("WebGPU check failed: " + e.message);
+        addError("WebGPU: " + e.message);
         return false;
       }
     }
 
-    function buildCandidates(base) {
-      const list = [];
-
-      // 1) n3xn proxy paths (absolute, using real origin)
-      if (base) {
-        list.push(
-          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm/+esm",
-          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm@0.2.85/+esm",
-          base + "/__cdn__/esm/@mlc-ai/web-llm",
-          base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm"
-        );
-      }
-
-      // 2) Direct CDNs (may fail inside some blob/sandbox contexts)
-      list.push(
+    function buildCandidates() {
+      const base = location.origin;
+      return [
+        base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm/+esm",
+        base + "/__cdn__/jsdelivr/npm/@mlc-ai/web-llm@0.2.85/+esm",
         "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm",
-        "https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.85/+esm",
         "https://esm.run/@mlc-ai/web-llm",
         "https://esm.sh/@mlc-ai/web-llm",
-        "https://unpkg.com/@mlc-ai/web-llm?module"
-      );
-
-      // 3) Encoded (avoid simple string rewriters)
-      list.push(
-        atob("aHR0cHM6Ly9jZG4uanNkZWxpdnIubmV0L25wbS9AbWxjLWFpL3dlYi1sbG0vK2VzbQ=="),
-        atob("aHR0cHM6Ly9lc20ucnVuL0BtbGMtYWkvd2ViLWxsbQ=="),
-        atob("aHR0cHM6Ly9lc20uc2gvQG1sYy1haS93ZWItbGxt")
-      );
-
-      return list;
+      ];
     }
 
     async function tryImport(url) {
@@ -386,64 +377,50 @@
       if (typeof factory !== "function" && mod.default) {
         factory = mod.default.CreateMLCEngine || mod.default;
       }
-      if (typeof factory !== "function") {
-        throw new Error("CreateMLCEngine not found in module exports");
-      }
+      if (typeof factory !== "function") throw new Error("CreateMLCEngine not found");
       return factory;
     }
 
     async function loadWebLLM() {
-      setStatus("webllmStatus", "Loading library…", "status-warn");
-      webllmReady = false;
-      CreateMLCEngine = null;
-
-      const base = getBase();
-      setStatus("baseStatus", base || "(none)");
-      addMessage("system", "Using base: " + (base || "(none detected)"));
-
-      const candidates = buildCandidates(base);
-
-      for (const url of candidates) {
+      setStatus("webllmStatus", "Loading…", "status-warn");
+      for (const url of buildCandidates()) {
         try {
-          addMessage("system", "Trying:\n" + url);
+          addMessage("system", "Trying WebLLM:\n" + url);
           CreateMLCEngine = await tryImport(url);
           webllmReady = true;
           setStatus("webllmStatus", "Ready", "status-ok");
-          addMessage("system", "WebLLM loaded successfully from:\n" + url);
+          addMessage("system", "WebLLM ready.");
           return true;
         } catch (err) {
-          addError("Failed: " + url + "\n" + (err.message || err));
+          addError("WebLLM fail: " + url + "\n" + (err.message || err));
         }
       }
-
       setStatus("webllmStatus", "Failed", "status-bad");
-      addMessage("system", "Could not load WebLLM.\n\nNext step is usually to add @mlc-ai/web-llm to n3xn SW offline packs, or open this page from the real origin instead of a blob.");
       return false;
     }
 
     async function loadSelectedModel() {
       if (!webllmReady || !CreateMLCEngine) {
-        addError("WebLLM is not ready. Set the correct base URL and click Reload WebLLM.");
+        addError("WebLLM not ready");
         return;
       }
       const modelId = $("modelSelect").value;
-      if (!modelId) { alert("Select a model first."); return; }
+      if (!modelId) { alert("Select a model"); return; }
       if (isGenerating) return;
 
       $("loadBtn").disabled = true;
       $("sendBtn").disabled = true;
       setStatus("engineStatus", "Loading…", "status-warn");
-      showProgress(true, "Downloading / loading model…", "First time can take several minutes.", 0);
+      showProgress(true, "Loading model…", "Please wait…", 0);
 
       try {
-        engine = null;
         engine = await CreateMLCEngine(modelId, {
-          initProgressCallback: (report) => {
-            showProgress(true, "Loading model…", report.text || "Working…", (report.progress || 0) * 100);
+          initProgressCallback: (r) => {
+            showProgress(true, "Loading model…", r.text || "", (r.progress || 0) * 100);
           }
         });
-        const shortName = modelId.replace("-Instruct-q4f16_1-MLC", "").replace("-q4f16_1-MLC", "");
-        setStatus("modelStatus", shortName, "status-ok");
+        const short = modelId.replace("-Instruct-q4f16_1-MLC", "").replace("-q4f16_1-MLC", "");
+        setStatus("modelStatus", short, "status-ok");
         setStatus("engineStatus", "Ready", "status-ok");
         $("sendBtn").disabled = false;
         addMessage("system", "Model loaded: " + modelId);
@@ -455,6 +432,22 @@
         showProgress(false);
         $("loadBtn").disabled = false;
       }
+    }
+
+    function buildSystemPrompt() {
+      let prompt = ($("systemPrompt").value || "").trim() || personalities.default;
+
+      if ($("useLibrary")?.checked) {
+        const lib = ($("knowledgeLibrary").value || "").trim();
+        if (lib) {
+          prompt += "\n\n### Knowledge library (always use when relevant)\n" + lib;
+        }
+      }
+
+      if ($("shareErrorsWithAI")?.checked && recentErrors.length) {
+        prompt += "\n\nRecent browser errors:\n" + recentErrors.slice(-4).join("\n");
+      }
+      return prompt;
     }
 
     async function sendMessage() {
@@ -471,28 +464,24 @@
       const replyEl = addMessage("assistant", "…");
 
       try {
-        let systemPrompt = $("systemPrompt").value.trim() || personalities.default;
-        if ($("shareErrorsWithAI")?.checked && recentErrors.length) {
-          systemPrompt += "\n\nRecent browser errors:\n" + recentErrors.slice(-5).join("\n");
-        }
         const messages = [
-          { role: "system", content: systemPrompt },
+          { role: "system", content: buildSystemPrompt() },
           { role: "user", content: text }
         ];
-        let fullReply = "";
+        let full = "";
         const completion = await engine.chat.completions.create({
           messages, stream: true, temperature: 0.7,
         });
         for await (const chunk of completion) {
           const delta = chunk.choices[0]?.delta?.content || "";
-          fullReply += delta;
-          replyEl.textContent = fullReply || "…";
+          full += delta;
+          replyEl.textContent = full || "…";
           $("messages").scrollTop = $("messages").scrollHeight;
         }
-        if (!fullReply) replyEl.textContent = "(No response)";
+        if (!full) replyEl.textContent = "(No response)";
       } catch (err) {
         replyEl.textContent = "Error while generating.";
-        addError("Generation error: " + (err.message || err));
+        addError("Gen error: " + (err.message || err));
       } finally {
         isGenerating = false;
         $("sendBtn").disabled = false;
@@ -513,36 +502,35 @@
     $("sendBtn").addEventListener("click", sendMessage);
     $("personality").addEventListener("change", applyPersonality);
     $("menuBtn").addEventListener("click", () => $("sidebar").classList.toggle("open"));
-    $("reloadLibBtn").addEventListener("click", () => loadWebLLM());
     $("userInput").addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
     });
 
+    $("knowledgeLibrary").addEventListener("input", scheduleLibrarySave);
+    $("saveLibraryBtn").addEventListener("click", () => {
+      saveKnowledge($("knowledgeLibrary").value);
+    });
+    $("resetLibraryBtn").addEventListener("click", () => {
+      if (confirm("Reset knowledge library to the default n3xn facts?")) {
+        $("knowledgeLibrary").value = DEFAULT_KNOWLEDGE;
+        saveKnowledge(DEFAULT_KNOWLEDGE);
+      }
+    });
+    $("systemPrompt").addEventListener("input", () => {
+      $("personality").value = "custom";
+      saveSystemPrompt($("systemPrompt").value);
+    });
+
     // Init
     (async function init() {
-      $("systemPrompt").value = personalities.default;
-
-      detectedBase = detectBaseOrigin();
-      if (detectedBase) {
-        $("baseUrl").value = detectedBase;
-      }
-      setStatus("baseStatus", detectedBase || "(none)");
+      $("systemPrompt").value = loadSystemPrompt();
+      $("knowledgeLibrary").value = loadKnowledge();
 
       addMessage("system", "n3xn AI starting…");
-      addMessage("system", "location.href = " + location.href);
-      addMessage("system", "Detected base = " + (detectedBase || "(none)"));
-
-      if (location.protocol === "blob:") {
-        addMessage("system", "Running inside a blob: URL (n3xn HTML runner).\nUsing detected/real origin for /__cdn__/ paths.");
-      }
-
       await checkWebGPU();
       await loadWebLLM();
-
       if (webllmReady) {
-        addMessage("system", "Ready. Pick a tiny model and click Load Model.");
-      } else {
-        addMessage("system", "WebLLM failed to load.\nCheck the Base URL box (should be like https://n3xn-vfs.pages.dev) then click \"Reload WebLLM with this base\".");
+        addMessage("system", "Ready. Knowledge library is active and editable in the sidebar.");
       }
     })();
   </script>
