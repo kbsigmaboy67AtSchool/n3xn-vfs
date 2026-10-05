@@ -1,5 +1,5 @@
 /* n3xn VFS SW v13 — full offline CDN packs (Monaco, Pyodide, React, Babel, JSZip, Wasmoon, fonts, V0RT3X) */
-const SHELL = "n3xn-shell-v14";
+const SHELL = "n3xn-shell-v15";
 const MONACO = "n3xn-monaco-v4";
 const PYODIDE_CACHE = "n3xn-pyodide-v1";
 const CDN_CACHE = "n3xn-cdn-v2";
