@@ -1,9 +1,9 @@
 /**
- * n3xn custom Monaco Monarch language definitions
- * Edit this file at the site root — loaded on Monaco init.
+ * n3xn custom Monaco Monarch language definitions & IntelliSense providers
+ * Version support: .minecraft (>1.20.6), .minecraft-v-1.20.6, .minecraft-v-1.16.5, .minecraft-v-1.12.2
  *
  * Supported export modes:
- * - ESM import: import languages, registerMinecraftColorPicker from './n3xn-lang-highlights.js'
+ * - ESM import: import languages, registerMonacoProviders from './n3xn-lang-highlights.js'
  * - Browser <script>: window.__n3xnLangHighlights
  */
 
@@ -163,9 +163,9 @@ const mcsnTokens = {
 };
 
 // ---------------------------------------------------------------------------
-// 5. Minecraft 1.20.6 / EaglerXcraft Command Language (.mcfunction, .minecraft)
+// 5. Minecraft Command Engine (Supports .minecraft >1.20.6, 1.20.6, 1.16.5, 1.12.2)
 // ---------------------------------------------------------------------------
-const mcfunctionTokens = {
+const createMinecraftTokenizer = (version = "1.20.6") => ({
   defaultToken: "",
   ignoreCase: false,
   commands: [
@@ -185,70 +185,53 @@ const mcfunctionTokens = {
     "summon", "dimension", "if", "unless", "store", "run", "entity", "block",
     "blocks", "score", "matches", "predicate", "loaded", "result", "success"
   ],
-  selectors: ["@p", "@a", "@r", "@e", "@s", "@n", "@v"],
-  selectorArgs: [
-    "advancements", "distance", "dx", "dy", "dz", "gamemode", "level", "limit",
-    "name", "nbt", "predicate", "scores", "sort", "tag", "team", "type",
-    "x", "x_rotation", "y", "y_rotation", "z"
-  ],
-  jsonColors: [
-    "black", "dark_blue", "dark_green", "dark_aqua", "dark_red", "dark_purple",
-    "gold", "gray", "dark_gray", "blue", "green", "aqua", "red", "light_purple",
-    "yellow", "white", "reset"
-  ],
+  flags: ["force", "normal", "destroy", "keep", "replace", "masked", "filtered", "append", "prepend", "insert", "merge", "set"],
   tokenizer: {
     root: [
-      // Line Comments
       [/#.*$/, "comment"],
 
-      // Relative & Caret Coordinates (~ ~1 ~ / ^ ^ ^2)
-      [/([~^])-?\d*(\.\d+)?/, "number.coordinate"],
+      // Explicit slash command vs unslashed function command
+      [/\/[a-zA-Z_][a-zA-Z0-9_\-.]*/, "keyword.command.slash"],
+      [/\b(particle|execute|setblock|fill|summon|attribute|data|scoreboard|effect|give|tp|teleport)\b/, "keyword.command"],
 
-      // Entity Selectors (@a, @p, @e[type=zombie])
-      [/@[parse]/, "keyword.selector"],
+      // Namespaced Identifiers (e.g., minecraft:dolphin, custom:particle_fx)
+      [/[a-z0-9_.\-]+:[a-z0-9_.\-\/]+/, "entity.name.namespace"],
 
-      // Double-escaped newline in JSON string blocks
-      [/\\\\n/, "string.escape"],
+      // Tilde and Caret Coordinates (e.g. ~ ~1 ~-0.15, ^ ^ ^2, bare ~ and ^)
+      [/([~^])(-?\d*\.?\d+)?/, "number.coordinate"],
 
-      // Target Selector Arguments inside [...]
+      // Decimals without zero (.15, .08) and numbers (0, 10, -1.0)
+      [/-?(\d+\.?\d*|\.\d+)[fFdDbBsSlL]?/, "number"],
+
+      // Target Selectors (@p, @a, @r, @e, @s, @n, @v)
+      [/@[apresnv](\[[^\]]*\])?/, "keyword.selector"],
+
+      // Selector arguments inside brackets
       [/\b(type|tag|scores|team|name|distance|x|y|z|dx|dy|dz|x_rotation|y_rotation|limit|sort|gamemode|level|advancements|nbt)=/, "keyword.selector.arg"],
 
-      // Execute Chain Modifiers
-      [/\b(as|at|positioned|rotated|facing|align|anchored|in|dimension|if|unless|store|run|entity|block|blocks|score|matches|predicate|loaded|result|success)\b/, {
-        cases: {
-          "@executeKeywords": "keyword.directive",
-          "@default": "identifier"
-        }
-      }],
+      // Execute directives
+      [/\b(as|at|positioned|rotated|facing|align|anchored|in|dimension|if|unless|store|run|entity|block|blocks|score|matches|predicate|loaded|result|success)\b/, "keyword.directive"],
 
-      // Minecraft Colors in JSON/NBT
+      // Flags and Mode Modifiers
+      [/\b(force|normal|destroy|keep|replace|masked|filtered|append|prepend|insert|merge|set)\b/, "keyword.flag"],
+
+      // Named Colors and Hex Strings
       [/\b(black|dark_blue|dark_green|dark_aqua|dark_red|dark_purple|gold|gray|dark_gray|blue|green|aqua|red|light_purple|yellow|white|reset)\b/, "constant.color"],
-
-      // Hex Colors (#ff0000)
       [/#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})\b/, "constant.color"],
 
-      // Main Minecraft Commands
-      [/[a-zA-Z_][a-zA-Z0-9_\-.]*/, {
-        cases: {
-          "@commands": "keyword",
-          "@default": "identifier"
-        }
-      }],
-
-      // Strings
+      // Double Escaped JSON Strings
+      [/\\\\n/, "string.escape"],
       [/"([^"\\]|\\.)*$/, "string.invalid"],
       [/'([^'\\]|\\.)*$/, "string.invalid"],
       [/"/, "string", "@string_double"],
       [/'/, "string", "@string_single"],
 
-      // Numbers
-      [/-?\d+(\.\d+)?[fFdDbBsSlL]?/, "number"],
-
-      // Brackets, Delimiters & Operators
       [/[{}()\[\]]/, "@brackets"],
       [/[:=,]/, "delimiter"],
-      [/[!~^]/, "operator"],
-      [/\s+/, "white"]
+      [/\s+/, "white"],
+
+      // Catch-all invalid error marker for mismatched/illegal tokens
+      [/[^\s]+/, "invalid"]
     ],
     string_double: [
       [/[^\\"]+/, "string"],
@@ -261,10 +244,10 @@ const mcfunctionTokens = {
       [/'/, "string", "@pop"]
     ]
   }
-};
+});
 
 // ---------------------------------------------------------------------------
-// Language Export List
+// Language Export Mapping
 // ---------------------------------------------------------------------------
 /** @type {Array<{ id: string, extensions: string[], aliases?: string[], tokens: object, conf?: object }>} */
 const languages = [
@@ -273,173 +256,128 @@ const languages = [
     extensions: [".b", ".bf"],
     aliases: ["Brainfuck", "BF"],
     tokens: brainfuckTokens,
-    conf: {
-      brackets: [["[", "]"]],
-      autoClosingPairs: [{ open: "[", close: "]" }],
-    },
+    conf: { brackets: [["[", "]"]], autoClosingPairs: [{ open: "[", close: "]" }] }
   },
   {
     id: "nmath",
     extensions: [".nmath"],
     aliases: ["NMath", "English Math"],
     tokens: nmathTokens,
-    conf: {
-      comments: { lineComment: "#" },
-      brackets: [
-        ["(", ")"],
-        ["[", "]"],
-      ],
-      autoClosingPairs: [
-        { open: "(", close: ")" },
-        { open: "[", close: "]" },
-        { open: '"', close: '"' },
-      ],
-    },
+    conf: { comments: { lineComment: "#" }, brackets: [["(", ")"], ["[", "]"]], autoClosingPairs: [{ open: "(", close: ")" }, { open: "[", close: "]" }, { open: '"', close: '"' }] }
   },
   {
     id: "nexc",
     extensions: [".nexc"],
     aliases: ["N3XN Exec"],
     tokens: nexcTokens,
-    conf: {
-      comments: { lineComment: "//", blockComment: ["/*", "*/"] },
-      brackets: [
-        ["{", "}"],
-        ["[", "]"],
-        ["(", ")"],
-      ],
-      autoClosingPairs: [
-        { open: "{", close: "}" },
-        { open: "[", close: "]" },
-        { open: "(", close: ")" },
-        { open: '"', close: '"' },
-        { open: "'", close: "'" },
-      ],
-    },
+    conf: { comments: { lineComment: "//", blockComment: ["/*", "*/"] }, brackets: [["{", "}"], ["[", "]"], ["(", ")"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: '"', close: '"' }, { open: "'", close: "'" }] }
   },
   {
     id: "mcsn",
     extensions: [".mcsn"],
     aliases: ["MCSN", "Minecraft Compact Structure Notation"],
     tokens: mcsnTokens,
-    conf: {
-      comments: { lineComment: "#" },
-      brackets: [
-        ["{", "}"],
-        ["[", "]"],
-        ["(", ")"],
-      ],
-      autoClosingPairs: [
-        { open: "{", close: "}" },
-        { open: "[", close: "]" },
-        { open: "(", close: ")" },
-        { open: '"', close: '"' },
-        { open: "'", close: "'" },
-      ],
-    },
+    conf: { comments: { lineComment: "#" }, brackets: [["{", "}"], ["[", "]"], ["(", ")"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: '"', close: '"' }, { open: "'", close: "'" }] }
   },
   {
     id: "mcfunction",
     extensions: [".mcfunction", ".minecraft", ".mccmd"],
-    aliases: ["Minecraft Command", "EaglerXcraft Command", "MCFunction"],
-    tokens: mcfunctionTokens,
-    conf: {
-      comments: { lineComment: "#" },
-      brackets: [
-        ["{", "}"],
-        ["[", "]"],
-        ["(", ")"],
-      ],
-      autoClosingPairs: [
-        { open: "{", close: "}" },
-        { open: "[", close: "]" },
-        { open: "(", close: ")" },
-        { open: '"', close: '"' },
-        { open: "'", close: "'" },
-      ],
-    },
+    aliases: ["Minecraft Command (>1.20.6)", "EaglerXcraft 1.20.6 Command"],
+    tokens: createMinecraftTokenizer(">1.20.6"),
+    conf: { comments: { lineComment: "#" }, brackets: [["{", "}"], ["[", "]"], ["(", ")"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }, { open: "(", close: ")" }, { open: '"', close: '"' }, { open: "'", close: "'" }] }
   },
+  {
+    id: "mcfunction-1-20-6",
+    extensions: [".minecraft-v-1.20.6"],
+    aliases: ["Minecraft 1.20.6 Command"],
+    tokens: createMinecraftTokenizer("1.20.6"),
+    conf: { comments: { lineComment: "#" }, brackets: [["{", "}"], ["[", "]"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }] }
+  },
+  {
+    id: "mcfunction-1-16-5",
+    extensions: [".minecraft-v-1.16.5"],
+    aliases: ["Minecraft 1.16.5 Command"],
+    tokens: createMinecraftTokenizer("1.16.5"),
+    conf: { comments: { lineComment: "#" }, brackets: [["{", "}"], ["[", "]"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }] }
+  },
+  {
+    id: "mcfunction-1-12-2",
+    extensions: [".minecraft-v-1.12.2"],
+    aliases: ["Minecraft 1.12.2 Command (Legacy)"],
+    tokens: createMinecraftTokenizer("1.12.2"),
+    conf: { comments: { lineComment: "#" }, brackets: [["{", "}"], ["[", "]"]], autoClosingPairs: [{ open: "{", close: "}" }, { open: "[", close: "]" }] }
+  }
 ];
 
 // ---------------------------------------------------------------------------
-// Monaco Native Color Picker Helper for Minecraft & Hex Colors
+// Monaco Autocomplete, Hover, and Color Picker Providers
 // ---------------------------------------------------------------------------
-const MINECRAFT_COLOR_MAP = {
-  black: { red: 0, green: 0, blue: 0, alpha: 1 },
-  dark_blue: { red: 0, green: 0, blue: 0.66, alpha: 1 },
-  dark_green: { red: 0, green: 0.66, blue: 0, alpha: 1 },
-  dark_aqua: { red: 0, green: 0.66, blue: 0.66, alpha: 1 },
-  dark_red: { red: 0.66, green: 0, blue: 0, alpha: 1 },
-  dark_purple: { red: 0.66, green: 0, blue: 0.66, alpha: 1 },
-  gold: { red: 1, green: 0.66, blue: 0, alpha: 1 },
-  gray: { red: 0.66, green: 0.66, blue: 0.66, alpha: 1 },
-  dark_gray: { red: 0.33, green: 0.33, blue: 0.33, alpha: 1 },
-  blue: { red: 0.33, green: 0.33, blue: 1, alpha: 1 },
-  green: { red: 0.33, green: 1, blue: 0.33, alpha: 1 },
-  aqua: { red: 0.33, green: 1, blue: 1, alpha: 1 },
-  red: { red: 1, green: 0.33, blue: 0.33, alpha: 1 },
-  light_purple: { red: 1, green: 0.33, blue: 1, alpha: 1 },
-  yellow: { red: 1, green: 1, blue: 0.33, alpha: 1 },
-  white: { red: 1, green: 1, blue: 1, alpha: 1 },
-};
+export function registerMonacoProviders(monaco) {
+  const mcLangs = ["mcfunction", "mcfunction-1-20-6", "mcfunction-1-16-5", "mcfunction-1-12-2", "mcsn"];
 
-/**
- * Registers native Monaco color picker for Minecraft named colors and Hex strings
- * @param {object} monaco - Global monaco instance
- * @param {string} langId - Language ID (e.g. 'mcfunction' or 'mcsn')
- */
-export function registerMinecraftColorPicker(monaco, langId = "mcfunction") {
-  monaco.languages.registerColorProvider(langId, {
-    provideColorPresentations: (model, colorInfo) => {
-      const { red, green, blue } = colorInfo.color;
-      const r255 = Math.round(red * 255);
-      const g255 = Math.round(green * 255);
-      const b255 = Math.round(blue * 255);
-      const hex = `#${((1 << 24) + (r255 << 16) + (g255 << 8) + b255).toString(16).slice(1)}`;
+  mcLangs.forEach(langId => {
+    // 1. Contextual Autocomplete Provider ("What can be typed next")
+    monaco.languages.registerCompletionItemProvider(langId, {
+      provideCompletionItems: (model, position) => {
+        const textUntilPosition = model.getValueInRange({
+          startLineNumber: position.lineNumber,
+          startColumn: 1,
+          endLineNumber: position.lineNumber,
+          endColumn: position.column
+        });
 
-      // Check if matches an exact Minecraft named color
-      let closestName = null;
-      for (const [name, rgb] of Object.entries(MINECRAFT_COLOR_MAP)) {
-        if (
-          Math.abs(rgb.red - red) < 0.05 &&
-          Math.abs(rgb.green - green) < 0.05 &&
-          Math.abs(rgb.blue - blue) < 0.05
-        ) {
-          closestName = name;
-          break;
-        }
-      }
+        const suggestions = [];
 
-      const presentations = [{ label: `"${hex}"` }];
-      if (closestName) {
-        presentations.unshift({ label: `"${closestName}"` });
-      }
-      return presentations;
-    },
-    provideDocumentColors: (model) => {
-      const matches = [];
-      const lines = model.getLinesContent();
-
-      lines.forEach((lineText, lineIdx) => {
-        // Search named colors
-        for (const [colorName, rgb] of Object.entries(MINECRAFT_COLOR_MAP)) {
-          const regex = new RegExp(`\\b${colorName}\\b`, "g");
-          let match;
-          while ((match = regex.exec(lineText)) !== null) {
-            matches.push({
-              color: rgb,
-              range: {
-                startLineNumber: lineIdx + 1,
-                startColumn: match.index + 1,
-                endLineNumber: lineIdx + 1,
-                endColumn: match.index + 1 + colorName.length,
-              },
+        if (textUntilPosition.trim() === "" || textUntilPosition.endsWith("/")) {
+          const cmds = ["particle", "execute", "attribute", "summon", "setblock", "fill", "data", "scoreboard", "tellraw"];
+          cmds.forEach(cmd => {
+            suggestions.push({
+              label: cmd,
+              kind: monaco.languages.CompletionItemKind.Keyword,
+              insertText: cmd,
+              detail: "Minecraft Command"
             });
-          }
+          });
+        } else if (textUntilPosition.includes("particle ")) {
+          const particles = ["minecraft:dolphin", "minecraft:scrape", "minecraft:electric_spark", "minecraft:soul_fire_flame", "minecraft:totem_of_undying", "minecraft:trial_spawner_detection_ominous"];
+          particles.forEach(p => {
+            suggestions.push({
+              label: p,
+              kind: monaco.languages.CompletionItemKind.Value,
+              insertText: p,
+              detail: "Particle ID"
+            });
+          });
         }
-      });
-      return matches;
-    },
+
+        return { suggestions };
+      }
+    });
+
+    // 2. Hover Info Provider
+    monaco.languages.registerHoverProvider(langId, {
+      provideHover: (model, position) => {
+        const word = model.getWordAtPosition(position);
+        if (!word) return;
+
+        if (word.word === "particle") {
+          return {
+            contents: [
+              { value: "**`/particle` Command**" },
+              { value: "Syntax: `particle <name> <pos> <delta> <speed> <count> [force|normal]`" }
+            ]
+          };
+        }
+        if (word.word === "attribute") {
+          return {
+            contents: [
+              { value: "**`/attribute` Command**" },
+              { value: "Syntax: `attribute <target> <attribute> base set|get <value>`" }
+            ]
+          };
+        }
+      }
+    });
   });
 }
 
@@ -447,8 +385,8 @@ export function registerMinecraftColorPicker(monaco, langId = "mcfunction") {
 export default languages;
 export { languages };
 
-// Classic Script Fallback
+// Script Tag Fallback
 if (typeof window !== "undefined") {
   window.__n3xnLangHighlights = languages;
-  window.__n3xnRegisterColorPicker = registerMinecraftColorPicker;
+  window.__n3xnRegisterMonacoProviders = registerMonacoProviders;
 }
